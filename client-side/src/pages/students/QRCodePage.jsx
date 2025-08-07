@@ -1,12 +1,10 @@
-import React, { useState, useEffect } from "react";
-import { QRCode } from "react-qr-code";
-import { formatDate } from "../../utils/stringUtils";
-import { getInformationData } from "../../authentication/Authentication";
-import { Link, useNavigate } from "react-router-dom";
 import axios from "axios";
-import backendConnection from "../../api/backendApi";
+import { useEffect, useState } from "react";
 import { InfinitySpin } from "react-loader-spinner";
-import { motion } from "framer-motion";
+import { QRCode } from "react-qr-code";
+import { Link, useNavigate } from "react-router-dom";
+import backendConnection from "../../api/backendApi";
+import { getInformationData } from "../../authentication/Authentication";
 import { formattedDate } from "../../components/tools/clientTools";
 
 const QRCodePage = ({ closeView, event }) => {
@@ -19,6 +17,8 @@ const QRCodePage = ({ closeView, event }) => {
   const [merchData, setMerchData] = useState([]);
   const navigate = useNavigate();
   const student = getInformationData();
+  const { sessionConfig } = event;
+
 
   const handleBackdropClick = (e) => {
     if (e.target.id === "modal-backdrop") {
@@ -26,26 +26,61 @@ const QRCodePage = ({ closeView, event }) => {
     }
   };
 
+  // const checkIfUserIsAttendee = () => {
+  //   setIsFree(true);
+  //   setIsLoading(true);
+
+  //   setStudentId(student.id_number);
+
+  //   const attendee = event.attendees.find(
+  //     (attendee) => attendee.id_number === student.id_number
+  //   );
+  //   const attendanceType = event.attendanceType
+
+  //   if (attendee) {
+  //     setIsAttendee(true);
+  //     setStudentName(attendee.name);
+  //     setAttendanceStatus(attendee.isAttended);
+  //   } else {
+  //     setIsAttendee(false);
+  //     setStudentName("");
+  //   }
+  //   setIsLoading(false);
+  // };
+
   const checkIfUserIsAttendee = () => {
-    setIsFree(true);
-    setIsLoading(true);
+      setIsLoading(true);
+      setStudentId(student.id_number);
 
-    setStudentId(student.id_number);
+      const attendee = event.attendees.find(
+        (attendee) => attendee.id_number === student.id_number
+      );
 
-    const attendee = event.attendees.find(
-      (attendee) => attendee.id_number === student.id_number
-    );
+      const attendanceType = event.attendanceType; // "open" or "ticketed"
 
-    if (attendee) {
-      setIsAttendee(true);
-      setStudentName(attendee.name);
-      setAttendanceStatus(attendee.isAttended);
-    } else {
-      setIsAttendee(false);
-      setStudentName("");
-    }
-    setIsLoading(false);
+      // Combine checks
+      if (attendanceType === "open") {
+        // For open events, if user is listed as attendee
+        // setIsAttendee(true);
+        // setStudentName(attendee.name);
+        // setAttendanceStatus(attendee.isAttended);
+        setIsFree(true);
+
+      } else if (attendanceType === "ticketed" && attendee) {
+        // For ticketed events, also check if user bought ticket (attendee exists)
+        setIsAttendee(true);
+        setStudentName(attendee.name);
+        setAttendanceStatus(attendee.isAttended);
+        
+      } else {
+        // Not an attendee or attendance type mismatch
+        setIsAttendee(false);
+        setStudentName("");
+      }
+
+      setIsLoading(false);
   };
+
 
   useEffect(() => {
     checkIfUserIsAttendee();
@@ -222,7 +257,36 @@ const QRCodePage = ({ closeView, event }) => {
                       <div className="text-sm text-gray-700 font-medium mb-1">
                         Attendance Status:
                       </div>
-                      <div className="flex items-center gap-3 ">
+                      <div className="flex items-center">
+                        {event.sessionConfig &&
+                          (() => {
+                            // Filter out only enabled sessions
+                            const enabledSessions = Object.entries(event.sessionConfig).filter(
+                              ([, sessionData]) => sessionData.enabled
+                            );
+
+                            return enabledSessions.map(([sessionName], index) => (
+                              <div key={sessionName} className="flex items-center">
+                                {/* Session Content */}
+                                <div className="text-center">
+                                  <div className="text-sm text-gray-700 font-semibold mb-2">
+                                    {sessionName.charAt(0).toUpperCase() + sessionName.slice(1)}
+                                  </div>
+                                  <div className="text-sm text-gray-700 font-medium mb-1">
+                                    {renderStatusBadge()}
+                                  </div>
+                                </div>
+
+                                {/* Divider only if not the last session */}
+                                {index < enabledSessions.length - 1 && (
+                                  <div className="h-16 w-px bg-gray-300 mx-6"></div>
+                                )}
+                              </div>
+                            ));
+                          })()}
+                      </div>
+
+                      {/* <div className="flex items-center gap-3 ">
                         <div className="text-center">
                           <div className="text-sm text-gray-700 font-semibold mb-2">
                             Morning
@@ -242,7 +306,7 @@ const QRCodePage = ({ closeView, event }) => {
                             {renderStatusBadge()}
                           </div>
                         </div>
-                      </div>
+                      </div> */}
                     </div>
                   </div>
                   <p className="text-sm text-gray-500 mt-4">

@@ -1,10 +1,8 @@
-import React, { useState, useEffect } from "react";
-import QRCodePage from "./QRCodePage";
-import { getEvents } from "../../api/event";
-import { MdOutlineQueryStats } from "react-icons/md";
-import { formatDate } from "../../utils/stringUtils";
 import { motion } from "framer-motion";
+import { useEffect, useState } from "react";
+import { getEvents } from "../../api/event";
 import { formattedDate } from "../../components/tools/clientTools";
+import QRCodePage from "./QRCodePage";
 
 function StudentEvents() {
   const [showView, setShowView] = useState(false); // State to manage popup visibility
@@ -13,6 +11,7 @@ function StudentEvents() {
 
   const handleGetEvents = async () => {
     const response = await getEvents();
+    console.log("Fetched events data:", response); // <-- Debug log
     setEvents(response.data ? response.data : []);
   };
 
@@ -21,6 +20,7 @@ function StudentEvents() {
   }, []);
 
   const handleButtonClick = (event) => {
+    console.log("Button clicked for event:", event); // Debug log
     setSelectedEvent(event); // Store selected event data
     setShowView(true); // Show the QRCodePage
   };
