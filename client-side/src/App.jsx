@@ -1,4 +1,3 @@
-import React from "react";
 import { Route, BrowserRouter as Router, Routes } from "react-router-dom";
 
 import AdminLayout from "./components/layout/AdminLayout";
@@ -9,9 +8,9 @@ import Home from "./pages/Home";
 
 import AdminDashboard from "./pages/admin/AdminDashboard";
 import AdminRegister from "./pages/admin/AdminRegister";
+import Attendance from "./pages/admin/Attendance/Attendance";
 import Delete from "./pages/admin/Delete";
 import EditProduct from "./pages/admin/EditProduct";
-import Attendance from "./pages/admin/Attendance/Attendance";
 import Inventory from "./pages/admin/Inventory";
 import MembershipHistory from "./pages/admin/MembershipHistory";
 import MembershipRequest from "./pages/admin/MembershipRequest";
@@ -20,21 +19,20 @@ import Officers from "./pages/admin/Officers";
 import AllOfficers from "./pages/admin/officers/AllOfficers";
 import Request from "./pages/admin/officers/Request";
 
-import Raffle from "./pages/admin/events/EventRaffle";
-import RaffleTwo from './pages/admin/events/EventRaffleTwo'
 import AddAttendeeForm from "./pages/admin/Attendance/AddAttendeeForm";
+import Raffle from "./pages/admin/events/EventRaffleTwo";
 import AdminEvents from "./pages/admin/events/Events";
 
+import AdminAccountRequest from "./pages/admin/officers/AdminAccountRequest";
+import Members from "./pages/admin/officers/Members";
 import Suspend from "./pages/admin/officers/Suspend";
 import Orders from "./pages/admin/Orders";
 import Product from "./pages/admin/Product";
 import Renewal from "./pages/admin/Renewal";
 import Reports from "./pages/admin/Reports";
 import Resources from "./pages/admin/Resources";
-import Students from "./pages/admin/Students";
 import Settings from "./pages/admin/Settings";
-import AdminAccountRequest from "./pages/admin/officers/AdminAccountRequest";
-import Members from "./pages/admin/officers/Members";
+import Students from "./pages/admin/Students";
 
 import Login from "./pages/authentication/Login";
 import Register from "./pages/authentication/Register";
@@ -63,11 +61,11 @@ import Logs from "./pages/admin/Logs";
 import Community from "./pages/Community";
 import Events from "./pages/Events";
 
+import MarkAsPresent from "./pages/admin/MarkAsPresent";
+import { QRCodeScanner } from "./pages/admin/QRCodeScanner";
 import StudentPaidOrders from "./pages/students/orders/PaidOrders";
 import StudentPendingOrder from "./pages/students/orders/PendingOrders";
 import Resouces from "./pages/students/Resouces";
-import MarkAsPresent from "./pages/admin/MarkAsPresent";
-import { QRCodeScanner } from "./pages/admin/QRCodeScanner";
 
 const App = () => {
   return (
@@ -132,8 +130,8 @@ const App = () => {
             element={<PrivateRouteAdmin element={QRCodeScanner} />}
           />
           <Route
-            path="raffle/:eventId"
-            element={<PrivateRouteAdmin element={RaffleTwo} />}
+            path="raffle/:eventId/:eventName/:eventDate"
+            element={<PrivateRouteAdmin element={Raffle} />}
           />
 
           <Route
