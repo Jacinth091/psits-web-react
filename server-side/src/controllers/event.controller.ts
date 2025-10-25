@@ -1,11 +1,14 @@
 import { Request, Response } from "express";
+import mongoose, { Types } from "mongoose";
+import { getSgDate } from "../custom_function/date.formatter";
+import {
+  IAttendanceSession,
+  IAttendee,
+  IAttendeeRequirements,
+} from "../models/attendee.interface";
+import { IEvent, ISessionConfig } from "../models/event.interface";
 import { Event } from "../models/event.model";
 import { Merch } from "../models/merch.model";
-import mongoose, { Types } from "mongoose";
-import { IEvent } from "../models/event.interface";
-import { getSgDate } from "../custom_function/date.formatter";
-import { ISessionConfig } from "../models/event.interface";
-import { IAttendanceSession, IAttendee, IAttendeeRequirements } from "../models/attendee.interface";
 
 export const createManualEventController = async (
   req: Request,
@@ -278,7 +281,7 @@ export const updateAttendancePerSessionController = async (
           requirements: {
             insurance: false,
             prelim_payment: false,
-            midterm_payment: false
+            midterm_payment: false,
           },
           attendance: {
             morning: { attended: false, timestamp: null },
@@ -438,7 +441,17 @@ export const getEligibleAttendeesRaffleController = async (
       (attendee) => attendee.raffleIsWinner
     );
 
-    res.status(200).json({ attendees: eligibleAttendees, winners: winners });
+    const removedAttendees = event.attendees.filter(
+      (att) => att.raffleIsRemoved
+    );
+
+    res
+      .status(200)
+      .json({
+        attendees: eligibleAttendees,
+        winners: winners,
+        removed: removedAttendees,
+      });
   } catch (error) {
     console.error("Error fetching eligible attendees:", error);
     res
@@ -834,15 +847,15 @@ export const updateAttendeeRequirementsController = async (
       return res.status(400).json({ message: "Invalid event ID" });
     }
 
-    const event = await Event.findOne({ eventId: new mongoose.Types.ObjectId(eventId) });
+    const event = await Event.findOne({
+      eventId: new mongoose.Types.ObjectId(eventId),
+    });
     if (!event) {
       return res.status(404).json({ message: "Event not found" });
     }
 
     // Find attendee by id_number (you may also want to check campus if needed)
-    const attendee = event.attendees.find(
-      (att) => att.id_number === id_number
-    );
+    const attendee = event.attendees.find((att) => att.id_number === id_number);
 
     if (!attendee) {
       return res.status(404).json({ message: "Attendee not found" });
@@ -853,27 +866,35 @@ export const updateAttendeeRequirementsController = async (
 
     if (insurance !== undefined) {
       if (typeof insurance !== "boolean") {
-        return res.status(400).json({ message: "'insurance' must be a boolean" });
+        return res
+          .status(400)
+          .json({ message: "'insurance' must be a boolean" });
       }
       updates.insurance = insurance;
     }
 
     if (prelim_payment !== undefined) {
       if (typeof prelim_payment !== "boolean") {
-        return res.status(400).json({ message: "'prelim_payment' must be a boolean" });
+        return res
+          .status(400)
+          .json({ message: "'prelim_payment' must be a boolean" });
       }
       updates.prelim_payment = prelim_payment;
     }
 
     if (midterm_payment !== undefined) {
       if (typeof midterm_payment !== "boolean") {
-        return res.status(400).json({ message: "'midterm_payment' must be a boolean" });
+        return res
+          .status(400)
+          .json({ message: "'midterm_payment' must be a boolean" });
       }
       updates.midterm_payment = midterm_payment;
     }
 
     if (Object.keys(updates).length === 0) {
-      return res.status(400).json({ message: "No valid requirement fields provided to update" });
+      return res
+        .status(400)
+        .json({ message: "No valid requirement fields provided to update" });
     }
 
     // Apply updates
