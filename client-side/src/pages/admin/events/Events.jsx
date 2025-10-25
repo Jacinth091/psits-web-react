@@ -89,7 +89,12 @@ function Events() {
               Add Event
             </span>
           </button>
-          {isAddEventModalOpen && <AddEvent handleClose={closeModal} handleGetEvents={handleGetEvents} />}
+          {isAddEventModalOpen && (
+            <AddEvent
+              handleClose={closeModal}
+              handleGetEvents={handleGetEvents}
+            />
+          )}
           {events &&
             events.map((event) => (
               <motion.div
@@ -150,7 +155,7 @@ function Events() {
                       <div className="h-full w-full rounded-md">
                         {admin.campus === "UC-Main" && (
                           <Link
-                            to={`/admin/raffle/${event.eventId}`}
+                            to={`/admin/raffle/${event.eventId}/${event.eventName}/${event.eventDate}`}
                             className="h-full"
                           >
                             <button
