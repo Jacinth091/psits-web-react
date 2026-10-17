@@ -21,6 +21,7 @@ export const logs_action = Object.freeze({
   TRIGGER_CRON: "Triggered Cron Job",
   CANCEL_EXPIRED_ORDERS: "Cancelled Expired Orders",
   REBUILD_DB_INDEXES: "Rebuilt Database Indexes",
+  TOGGLE_STUDENT_SUSPEND_CRON: "Toggled Student Suspend Cron",
   // Orders
   APPROVE_ORDER: "Approved Order",
   CANCEL_ORDER: "Cancelled Order",
@@ -68,10 +69,15 @@ export const logs_action = Object.freeze({
   BACKFILL_CREATED_AT: "Backfilled Created At (Migration)",
   UPDATE_STUDENT_YEAR: "Updated Student Years",
   DECREMENT_STUDENT_YEAR: "Decrement Student Years",
+  SUSPEND_OLD_STUDENTS: "Suspended Old Students",
   // Membership
+  CREATE_MEMBERSHIP: "Created Membership",
+  ACTIVATE_MEMBERSHIP: "Activated Membership",
   APPROVE_MEMBERSHIP: "Approved Membership",
+  REQUEST_MEMBERSHIP: "Requested Membership",
   REVOKE_MEMBERSHIP: "Revoked Memberships",
   CHANGE_MEMBER_PRICE: "Changed Membership Price",
+  UPDATE_MEMBERSHIP_REFERENCE: "Updated Membership Reference Code",
   // Reports
   EXPORT_REPORT: "Exported Report",
   // Contributions

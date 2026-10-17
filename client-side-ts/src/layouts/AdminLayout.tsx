@@ -4,13 +4,10 @@ import { Menu } from "lucide-react";
 import { AdminSidebar } from "../features/admin/components";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
-import { AgentChatToggle } from "@/features/admin/agent-chat/components/AgentChatToggle";
-import { ChatTourOverlay } from "@/features/admin/agent-chat/components/ChatTourOverlay";
 
 export const AdminLayout = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
-  const [isChatOpen, setIsChatOpen] = useState(false);
 
   const toggleSidebar = () => {
     setIsSidebarOpen(!isSidebarOpen);
@@ -21,16 +18,16 @@ export const AdminLayout = () => {
   };
 
   return (
-    <div className="bg-background flex min-h-screen overflow-hidden">
+    <div className="bg-background flex min-h-dvh overflow-hidden">
       {/* Hamburger button for mobile */}
       <Button
         variant="ghost"
         size="icon-lg"
-        className="fixed top-4 left-4 z-50 lg:hidden"
+        className="bg-background fixed top-4 left-4 z-50 transition-all shadow-sm duration-300 lg:hidden"
         onClick={toggleSidebar}
         aria-label="Open sidebar"
       >
-        <Menu className="h-7 w-7" />
+        <Menu className="h-6 w-6" />
       </Button>
 
       {/* Backdrop overlay for mobile — always in DOM, fades in/out */}
@@ -49,7 +46,11 @@ export const AdminLayout = () => {
           isSidebarOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
-        <AdminSidebar collapsed={false} onToggleCollapse={toggleCollapse} />
+        <AdminSidebar
+          collapsed={false}
+          onToggleCollapse={toggleCollapse}
+          onCloseMobile={() => setIsSidebarOpen(false)}
+        />
       </div>
 
       {/* Sidebar for desktop */}
@@ -65,18 +66,13 @@ export const AdminLayout = () => {
       </div>
 
       {/* Main Content */}
-      <main className="flex h-screen min-w-0 flex-1 flex-col overflow-hidden">
+      <main className="flex h-dvh min-w-0 flex-1 flex-col overflow-hidden">
         {/* Page Content */}
-        <div className="flex-1 overflow-y-auto pt-14 lg:pt-0">
+        <div className="flex-1 overflow-y-auto overscroll-contain pt-14 lg:pt-0">
           <Outlet />
         </div>
       </main>
       <Toaster position="bottom-right" />
-      <AgentChatToggle isOpen={isChatOpen} onOpenChange={setIsChatOpen} />
-      <ChatTourOverlay
-        isChatOpen={isChatOpen}
-        onOpenChat={() => setIsChatOpen(true)}
-      />
     </div>
   );
 };

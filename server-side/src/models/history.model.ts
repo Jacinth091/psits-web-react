@@ -4,49 +4,40 @@ import { IHistory } from "./history.interface";
 export interface IHistoryDocument extends IHistory, Document {}
 
 const historySchema = new Schema<IHistoryDocument>({
-  id_number: {
-    type: String,
-    require: true,
+  membership_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Membership",
+    index: true,
   },
-  rfid: {
-    type: String,
+  student: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Student",
+    index: true,
   },
   reference_code: {
+    // `require` (the typo used on the other fields below) is not a Mongoose
+    // option, so this was never enforced — that is how a null and an empty
+    // string reached a unique field.
     type: String,
     unique: true,
-    require: true,
+    required: true,
   },
-  name: {
-    type: String,
-    require: true,
-  },
-  year: {
-    type: Number,
-    require: true,
-  },
-  course: {
-    type: String,
-    require: true,
-  },
-  type: {
-    type: String,
-    require: true,
-  },
+
   date: {
     type: Date,
-    require: true,
+    required: true,
   },
   admin: {
     type: String,
-    require: true,
+    required: true,
   },
   total: {
     type: Number,
-    require: true,
+    required: true,
   },
 });
 
 export const MembershipHistory = mongoose.model<IHistoryDocument>(
-  "membshipHistory",
+  "membershipHistory",
   historySchema
 );

@@ -35,13 +35,22 @@ const DEFAULT_FILTERS: StudentFilters = {
   courses: [],
   years: [],
   membershipStatus: "all",
-  appliedOn: "",
 };
 
 const DEFAULT_SORT: StudentSort = {
   field: "name",
   direction: "asc",
 };
+
+// The requests tab is a work queue, so it opens on the newest application
+// rather than alphabetically like the other tabs.
+const REQUESTS_DEFAULT_SORT: StudentSort = {
+  field: "applied",
+  direction: "desc",
+};
+
+const defaultSortForTab = (tab: StudentsTab): StudentSort =>
+  tab === "requests" ? REQUESTS_DEFAULT_SORT : DEFAULT_SORT;
 
 const DEFAULT_TAB_COUNTS: StudentTabCounts = {
   all: 0,
@@ -64,7 +73,6 @@ interface StudentApiRecord {
   applied?: string;
   deletedBy?: string;
   deletedDate?: string;
-  isFirstApplication?: boolean;
   campus?: string;
 }
 
@@ -76,12 +84,8 @@ const normalizeName = (record: StudentApiRecord) =>
     .trim();
 
 const normalizeStudent = (record: StudentApiRecord): AdminStudent => {
-  const membershipStatus = (record.membershipStatus || "")
-    .replace(/^MEMBERSHIP_/, "")
-    .replace(/^STATUS_/, "")
-    .trim();
   return {
-    id: String(record._id || record.id_number || crypto.randomUUID()),
+    id: String(record._id),
     id_number: String(record.id_number || ""),
     rfid: String(record.rfid || ""),
     first_name: String(record.first_name || ""),
@@ -91,12 +95,14 @@ const normalizeStudent = (record: StudentApiRecord): AdminStudent => {
     email: String(record.email || ""),
     course: String(record.course || ""),
     year: String(record.year || ""),
-    membershipStatus: membershipStatus || "NONE",
-    status: String(record.status || "").replace(/^STATUS_/, "").trim() || "",
+    membershipStatus: String(record.membershipStatus || ""),
+    status:
+      String(record.status || "")
+        .replace(/^STATUS_/, "")
+        .trim() || "",
     applied: String(record.applied || ""),
     deletedBy: String(record.deletedBy || ""),
     deletedDate: String(record.deletedDate || ""),
-    isFirstApplication: Boolean(record.isFirstApplication),
     campus: String(record.campus || ""),
   };
 };
@@ -122,15 +128,23 @@ const getSortValue = (student: AdminStudent, field: StudentSortField) => {
   return String(student[field] || "");
 };
 
-const formatDateKey = (value: string) => {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toISOString().slice(0, 10);
-};
+/** Date columns sort chronologically, not by how the string happens to read. */
+const DATE_SORT_FIELDS = new Set<StudentSortField>(["applied", "deletedDate"]);
 
-const createReferenceCode = () =>
-  Math.floor(Math.random() * (999999999 - 111111111 + 1)) + 111111111;
+/** Missing/unparseable dates sort last in either direction. */
+const compareDates = (left: string, right: string, descending: boolean) => {
+  const leftTime = left ? new Date(left).getTime() : NaN;
+  const rightTime = right ? new Date(right).getTime() : NaN;
+  const leftMissing = Number.isNaN(leftTime);
+  const rightMissing = Number.isNaN(rightTime);
+
+  if (leftMissing && rightMissing) return 0;
+  if (leftMissing) return 1;
+  if (rightMissing) return -1;
+
+  const result = leftTime - rightTime;
+  return descending ? -result : result;
+};
 
 export const useStudentsData = () => {
   const { user } = useAuth();
@@ -139,7 +153,7 @@ export const useStudentsData = () => {
   const [search, setSearch] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [filters, setFilters] = useState<StudentFilters>(DEFAULT_FILTERS);
-  const [sort, setSort] = useState<StudentSort>(DEFAULT_SORT);
+  const [sort, setSort] = useState<StudentSort>(defaultSortForTab("all"));
   const [page, setPage] = useState(1);
   const [isLoading, setIsLoading] = useState(true);
   const [isMutating, setIsMutating] = useState(false);
@@ -212,7 +226,7 @@ export const useStudentsData = () => {
     setPage(1);
     setSearch("");
     setFilters(DEFAULT_FILTERS);
-    setSort(DEFAULT_SORT);
+    setSort(defaultSortForTab(activeTab));
   }, [activeTab]);
 
   const filteredStudents = useMemo(() => {
@@ -236,15 +250,17 @@ export const useStudentsData = () => {
         ) {
           return false;
         }
-        if (
-          filters.appliedOn &&
-          formatDateKey(student.applied) !== filters.appliedOn
-        ) {
-          return false;
-        }
         return true;
       })
       .sort((left, right) => {
+        if (DATE_SORT_FIELDS.has(sort.field)) {
+          return compareDates(
+            getSortValue(left, sort.field),
+            getSortValue(right, sort.field),
+            sort.direction === "desc"
+          );
+        }
+
         const leftValue = getSortValue(left, sort.field).toLowerCase();
         const rightValue = getSortValue(right, sort.field).toLowerCase();
         const result = leftValue.localeCompare(rightValue, undefined, {
@@ -281,7 +297,11 @@ export const useStudentsData = () => {
             field,
             direction: currentSort.direction === "asc" ? "desc" : "asc",
           }
-        : { field, direction: "asc" }
+        : // Date columns open newest-first; text columns open A→Z.
+          {
+            field,
+            direction: DATE_SORT_FIELDS.has(field) ? "desc" : "asc",
+          }
     );
   };
 
@@ -306,6 +326,7 @@ export const useStudentsData = () => {
     setIsMutating(true);
     try {
       const result = await updateStudent(
+        values.id,
         values.id_number,
         values.rfid,
         values.first_name,
@@ -343,12 +364,9 @@ export const useStudentsData = () => {
   const approveStudentMembership = useCallback(
     (student: AdminStudent) => {
       return approveMembership({
-        reference_code: String(createReferenceCode()),
         id_number: student.id_number,
         rfid: student.rfid || "N/A",
-        type: student.isFirstApplication ? "Membership" : "Renewal",
         admin: user?.name || "Admin",
-        cash: membershipFee,
         date: new Date(),
         total: membershipFee,
       });
@@ -397,7 +415,7 @@ export const useStudentsData = () => {
       );
 
       if (isSuccess) {
-        if (action === "delete") showToast("success", "Student deleted.");
+        if (action === "delete") showToast("success", "Student suspended.");
         if (action === "restore") showToast("success", "Student restored.");
         await Promise.all([fetchStudents(), fetchStudentCounts()]);
         setSelectedIds([]);
@@ -433,6 +451,10 @@ export const useStudentsData = () => {
     setSearch,
     sort,
     submitMembership,
+    /** Reload the list and tab counts — used after adding a membership. */
+    refresh: async () => {
+      await Promise.all([fetchStudents(), fetchStudentCounts()]);
+    },
     tabCounts,
     total: filteredStudents.length,
     totalPages,

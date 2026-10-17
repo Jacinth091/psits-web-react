@@ -4,11 +4,13 @@ import fs from "fs/promises";
 import { emailService } from "./email.service";
 import { Orders } from "../models/orders.model";
 import { MembershipHistory } from "../models/history.model";
+import { Membership } from "../models/membership.model";
 import { orderService } from "./order.service";
+import { formatReceiptReference } from "../util/membership.util";
 import { format } from "date-fns";
+import { formatReceiptDateTime } from "../mail_template/mail.template";
 import { Resend } from "resend";
 import { EmailQueue } from "../models/email.model";
-import { AutomationJob } from "../models/automationJob.model";
 
 const MAX_RETRIES = 3;
 
@@ -36,13 +38,12 @@ const toPendingEntry = (entry: any): PendingEntry => ({
 const renderMembershipEmail = async (data: {
   name: string;
   reference_code: string;
-  cash: number;
+  reference_display?: string;
   total: number;
   course: string;
   year: number;
   admin: string;
   date: string;
-  change: number;
 }) => {
   const templatePath = path.join(
     __dirname,
@@ -85,22 +86,29 @@ const sendWithResend = async ({
   to: string;
   subject: string;
   html: string;
-  attachments?: Array<{ filename?: string; content?: Buffer; contentType?: string; contentId?: string }>;
+  attachments?: Array<{
+    filename?: string;
+    content?: Buffer;
+    contentType?: string;
+    contentId?: string;
+  }>;
 }) => {
   const resend = new Resend(process.env.RESEND_API_KEY);
   const from = process.env.EMAIL;
 
   if (!from) throw new Error("EMAIL is not configured");
 
-  const { error } = await resend.emails.send({
+  console.log("Function is called");
+  const result = await resend.emails.send({
     from,
     to,
     subject,
     html,
     attachments,
   });
-
-  if (error) throw new Error(error.message);
+  console.log("Resend result:", result);
+  if (result.error) throw new Error(result.error.message);
+  return result.data?.id;
 };
 
 const RESEND_BATCH_LIMIT = 50;
@@ -108,7 +116,9 @@ const RESEND_BATCH_LIMIT = 50;
 export const resendPendingEmails = async () => {
   const [receiptEntries, automationEntries] = await Promise.all([
     emailService.fetchByReceipt(),
-    EmailQueue.find({ type: "automation-report", status: "pending" }).sort({ timestamp: 1, retryCount: 1 }).lean(),
+    EmailQueue.find({ type: "automation-report", status: "pending" })
+      .sort({ timestamp: 1, retryCount: 1 })
+      .lean(),
   ]);
 
   const allEntries = [...receiptEntries, ...automationEntries];
@@ -149,91 +159,66 @@ export const resendPendingEmails = async () => {
 };
 
 const resendAutomationReport = async (entry: PendingEntry) => {
-  let reportPayload: {
-    jobName: string;
-    executionTime: string;
-    results: Array<{ success: boolean; data?: unknown; recordCount: number; durationMs: number; error?: string }>;
-    includeSummary: boolean;
-    includeRawData: boolean;
-    subject: string;
-  };
-
+  let payload: unknown;
   try {
-    reportPayload = JSON.parse(entry.payload || "{}");
+    payload = JSON.parse(entry.payload || "{}");
   } catch {
     throw new Error("Invalid automation report payload");
   }
 
-  const templatePath = path.join(__dirname, "../templates/automation-report.ejs");
-  let html: string;
-
-  if (entry.htmlBody) {
-    html = entry.htmlBody;
-  } else {
-    html = await ejs.renderFile(templatePath, {
-      jobName: reportPayload.jobName,
-      executionTime: new Date(reportPayload.executionTime).toLocaleString("en-US", {
-        weekday: "long",
-        year: "numeric",
-        month: "long",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        timeZone: "Asia/Manila",
-      }),
-      results: reportPayload.results,
-      includeSummary: reportPayload.includeSummary,
-      includeRawData: reportPayload.includeRawData,
-      targetCount: 1,
-      subject: reportPayload.subject,
-    });
-  }
-
-  const logoPath = path.join(__dirname, "../assets/psits.jpg");
-  const logoBuffer = await fs.readFile(logoPath);
-
-  await sendWithResend({
-    to: entry.email,
-    subject: reportPayload.subject,
-    html,
-    attachments: [
-      {
-        filename: "psits.jpg",
-        content: logoBuffer,
-        contentType: "image/jpeg",
-        contentId: "logo",
-      },
-    ],
-  });
+  const { sendAutomationWebhookPayload } = await import("./automation.service");
+  await sendAutomationWebhookPayload(
+    payload as Parameters<typeof sendAutomationWebhookPayload>[0]
+  );
 };
 
 const resendMembership = async (entry: PendingEntry) => {
   const history = await MembershipHistory.findOne({
     reference_code: entry.referenceCode,
-  });
+  }).populate("student");
 
   if (!history) {
     throw new Error(`Membership history not found for ${entry.referenceCode}`);
   }
 
-  const cash = history.total;
+  // The denormalized student fields were removed from the schema; derive
+  // them from the populated student (null-safe for orphan records).
+  const student = (history as any).student as {
+    first_name: string;
+    middle_name?: string;
+    last_name: string;
+    course: string;
+    year: number;
+  } | null;
+  const fullName = student
+    ? `${student.first_name} ${student.middle_name ?? ""} ${student.last_name}`.trim()
+    : "";
+
+  // The term lives on the parent membership; legacy rows without a
+  // `membership_id` fall back to the bare reference code.
+  const membership = history.membership_id
+    ? await Membership.findById(history.membership_id).lean()
+    : null;
+
   const data = {
-    name: history.name,
+    name: fullName,
     reference_code: history.reference_code,
-    cash,
+    reference_display: formatReceiptReference(
+      history.reference_code,
+      membership?.term_name
+    ),
     total: history.total,
-    course: history.course,
-    year: history.year,
+    course: student?.course ?? "",
+    year: student?.year ?? 0,
     admin: history.admin,
     date: format(new Date(history.date), "MMMM d, yyyy"),
-    change: 0,
   };
 
   const html = await renderMembershipEmail(data);
   const logoPath = path.join(__dirname, "../assets/psits.jpg");
   const logoBuffer = await fs.readFile(logoPath);
 
-  await sendWithResend({
+  const emailId = await sendWithResend({
     to: entry.email,
     subject: "Your Receipt from PSITS - UC Main",
     html,
@@ -246,6 +231,9 @@ const resendMembership = async (entry: PendingEntry) => {
       },
     ],
   });
+  if (emailId) {
+    await emailService.updateEmailIdById(entry._id, emailId);
+  }
 };
 
 const resendOrder = async (entry: PendingEntry) => {
@@ -260,9 +248,7 @@ const resendOrder = async (entry: PendingEntry) => {
   const cash = order.total;
   const receiptData = {
     reference_code: order.reference_code,
-    transaction_date: order.transaction_date
-      ? format(new Date(order.transaction_date), "MMMM d, yyyy")
-      : "N/A",
+    transaction_date: formatReceiptDateTime(order.transaction_date),
     student_name: order.student_name,
     id_number: order.id_number,
     course: order.course,
@@ -284,7 +270,7 @@ const resendOrder = async (entry: PendingEntry) => {
   const logoPath = path.join(__dirname, "../assets/psits.jpg");
   const logoBuffer = await fs.readFile(logoPath);
 
-  await sendWithResend({
+  const emailId = await sendWithResend({
     to: entry.email,
     subject: "Your Order Receipt from PSITS - UC Main",
     html,
@@ -297,4 +283,7 @@ const resendOrder = async (entry: PendingEntry) => {
       },
     ],
   });
+  if (emailId) {
+    await emailService.updateEmailIdById(entry._id, emailId);
+  }
 };

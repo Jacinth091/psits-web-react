@@ -29,7 +29,6 @@ const studentSchema = new Schema<IStudentDocument>({
   },
   email: {
     type: String,
-    required: true,
   },
   course: {
     type: String,
@@ -62,11 +61,6 @@ const studentSchema = new Schema<IStudentDocument>({
   deletedDate: {
     type: String,
   },
-  isFirstApplication: {
-    type: Boolean,
-    default: true,
-  },
-
   role: {
     type: String,
   },

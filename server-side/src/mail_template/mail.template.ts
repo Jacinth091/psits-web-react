@@ -14,6 +14,56 @@ import dotenv from "dotenv";
 dotenv.config();
 
 import { emailService } from "../services/email.service";
+import { AppError } from "../util/app.error.util";
+
+const MANILA_TIME_ZONE = "Asia/Manila";
+
+/**
+ * The PSITS logo is attached to every receipt and never changes at runtime, so
+ * it is read from disk once per process instead of on every send.
+ */
+let logoBufferPromise: Promise<Buffer> | null = null;
+
+export const psitsLogoBuffer = (): Promise<Buffer> => {
+  if (!logoBufferPromise) {
+    logoBufferPromise = fs
+      .readFile(path.join(__dirname, "../assets/psits.jpg"))
+      .catch((err) => {
+        // Don't cache a failed read — the next send should try again.
+        logoBufferPromise = null;
+        throw err;
+      });
+  }
+  return logoBufferPromise;
+};
+
+const receiptDateTimeFormatter = new Intl.DateTimeFormat("en-US", {
+  timeZone: MANILA_TIME_ZONE,
+  month: "long",
+  day: "numeric",
+  year: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  hour12: true,
+});
+
+/**
+ * @param value - A Date, ISO string, or timestamp. May be null/undefined.
+ * @returns e.g. "September 4, 2026 10:00 AM", or "N/A" when missing/invalid
+ */
+export const formatReceiptDateTime = (
+  value?: Date | string | number | null
+): string => {
+  if (!value) return "N/A";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "N/A";
+
+  const parts = receiptDateTimeFormatter.formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((p) => p.type === type)?.value ?? "";
+
+  return `${part("month")} ${part("day")}, ${part("year")} ${part("hour")}:${part("minute")} ${part("dayPeriod")}`;
+};
 
 type EmailTemplateOptions = {
   category: string;
@@ -132,17 +182,14 @@ const sendEmail = async ({
 
   const resend = getResendClient();
 
-  const { error } = await resend.emails.send({
+  const result = await resend.emails.send({
     from,
     to,
     subject,
     html,
     attachments,
   });
-
-  if (error) {
-    throw new Error(`Error sending email: ${error.message}`);
-  }
+  return result.data;
 };
 
 const sendPsitsTemplatedEmail = async (opts: {
@@ -161,7 +208,7 @@ const sendPsitsTemplatedEmail = async (opts: {
     logoDataUri: "cid:logo",
   });
 
-  await sendEmail({
+  return await sendEmail({
     to: opts.to,
     subject: opts.subject,
     html,
@@ -179,13 +226,15 @@ export const membershipRequestReceipt = async (
     return;
   }
 
-  const emailTemplate = await ejs.renderFile(
-    path.join(__dirname, "../assets/appr-membership-receipt.ejs"),
-    data
-  );
-
-  const logoPath = path.join(__dirname, "../assets/psits.jpg");
-  const logoBuffer = await fs.readFile(logoPath);
+  // Template compilation is cached by ejs; the logo is cached per process.
+  const [emailTemplate, logoBuffer] = await Promise.all([
+    ejs.renderFile(
+      path.join(__dirname, "../assets/appr-membership-receipt.ejs"),
+      data,
+      { cache: true }
+    ),
+    psitsLogoBuffer(),
+  ]);
 
   try {
     const queueEntry = await emailService.createByEmail(
@@ -195,7 +244,7 @@ export const membershipRequestReceipt = async (
       referenceCode
     );
 
-    await sendEmail({
+    const id = await sendEmail({
       to: studenteEmail,
       subject: "Your Receipt from PSITS - UC Main",
       html: emailTemplate,
@@ -208,7 +257,10 @@ export const membershipRequestReceipt = async (
         },
       ],
     });
-
+    if (!id) {
+      throw new AppError("Didnt received id", 500);
+    }
+    await emailService.updateEmailIdById(String(queueEntry._id), id?.id);
     await emailService.updateStatusById(String(queueEntry._id), "sent");
   } catch (err: unknown) {
     console.error(
@@ -243,7 +295,7 @@ export const orderReceipt = async (
       referenceCode
     );
 
-    await sendEmail({
+    const id = await sendEmail({
       to: studentEmail,
       subject: "Your Order Receipt from PSITS - UC Main",
       html: emailTemplate,
@@ -257,6 +309,10 @@ export const orderReceipt = async (
       ],
     });
 
+    if (!id) {
+      throw new AppError("Didnt received id", 500);
+    }
+    await emailService.updateEmailIdById(String(queueEntry._id), id?.id);
     await emailService.updateStatusById(String(queueEntry._id), "sent");
   } catch (err: unknown) {
     console.error(
@@ -315,7 +371,7 @@ export const forgotPasswordMail = async (
       token.slice(0, 8)
     );
 
-    await sendPsitsTemplatedEmail({
+    const id = await sendPsitsTemplatedEmail({
       to: studentMail,
       subject: "Reset Your Password",
       category: "Philippine Technology of Information Technology Students",
@@ -343,6 +399,9 @@ export const forgotPasswordMail = async (
       `,
     });
 
+    if (id?.id) {
+      await emailService.updateEmailIdById(queueEntry._id.toString(), id.id);
+    }
     await emailService.updateStatusById(queueEntry._id.toString(), "sent");
 
     return { status: true, message: "Email Sent" };
@@ -380,7 +439,7 @@ export const certificateOfParticipationEmail = async (
 
     const html = renderPsitsEmail({
       category: "Certificate",
-      title: "Congratulations! 🎉",
+      title: "Congratulations! Your Certificate of Participation",
       bodyHtml: `
         <p>Hi ${parsedData.student_name},</p>
         <p style="margin-bottom:20px;">
@@ -439,15 +498,15 @@ export const recruitmentApprovedMail = async (data: {
       "approval"
     );
 
-    await sendPsitsTemplatedEmail({
+    const id = await sendPsitsTemplatedEmail({
       to: data.applicantEmail,
-      subject: "Your PSITS Application Has Been Approved! 🎉",
+      subject: "Your PSITS Application Has Been Approved!",
       category: "Philippine Technology of Information Technology Students",
       title: "PSITS Application Approved",
       bodyHtml: `
         <p>Dear ${data.applicantName},</p>
         <p style="margin-bottom:16px;">
-          Congratulations! 🎉 We're happy to let you know that your application to join PSITS has been approved.
+          Congratulations! We're happy to let you know that your application to join PSITS has been approved.
         </p>
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f5f5f5; border-radius:8px; margin-bottom:20px;">
           <tr><td style="padding:16px 18px;">
@@ -462,6 +521,9 @@ export const recruitmentApprovedMail = async (data: {
       `,
     });
 
+    if (id?.id) {
+      await emailService.updateEmailIdById(String(queueEntry._id), id.id);
+    }
     await emailService.updateStatusById(String(queueEntry._id), "sent");
   } catch (err: unknown) {
     console.error(
@@ -497,7 +559,7 @@ export const recruitmentInterviewScheduledMail = async (data: {
       "interview_scheduled"
     );
 
-    await sendPsitsTemplatedEmail({
+    const id = await sendPsitsTemplatedEmail({
       to: data.applicantEmail,
       subject: "PSITS Interview Schedule Notification",
       category: "Philipine Technology of Information Technology Students",
@@ -532,6 +594,9 @@ export const recruitmentInterviewScheduledMail = async (data: {
       `,
     });
 
+    if (id?.id) {
+      await emailService.updateEmailIdById(String(queueEntry._id), id.id);
+    }
     await emailService.updateStatusById(String(queueEntry._id), "sent");
   } catch (err: unknown) {
     console.error(
@@ -562,7 +627,7 @@ export const recruitmentInterviewRescheduledMail = async (data: {
       "interview_rescheduled"
     );
 
-    await sendPsitsTemplatedEmail({
+    const id = await sendPsitsTemplatedEmail({
       to: data.applicantEmail,
       subject: "PSITS Interview Reschedule Notification",
       category: "Philipine Technology of Information Technology Students",
@@ -597,6 +662,9 @@ export const recruitmentInterviewRescheduledMail = async (data: {
       `,
     });
 
+    if (id?.id) {
+      await emailService.updateEmailIdById(String(queueEntry._id), id.id);
+    }
     await emailService.updateStatusById(String(queueEntry._id), "sent");
   } catch (err: unknown) {
     console.error(
@@ -632,7 +700,7 @@ export const recruitmentAccountCreatedMail = async (data: {
       "account_created"
     );
 
-    await sendPsitsTemplatedEmail({
+    const id = await sendPsitsTemplatedEmail({
       to: data.applicantEmail,
       subject: `${"Your PSITS " + data.role} Account Has Been Created!`,
       category: "Philippine Technology of Information Technology Students",
@@ -659,6 +727,9 @@ export const recruitmentAccountCreatedMail = async (data: {
       `,
     });
 
+    if (id?.id) {
+      await emailService.updateEmailIdById(String(queueEntry._id), id.id);
+    }
     await emailService.updateStatusById(String(queueEntry._id), "sent");
   } catch (err: unknown) {
     console.error(
@@ -690,7 +761,7 @@ export const recruitmentRejectedMail = async (data: {
       "rejection"
     );
 
-    await sendPsitsTemplatedEmail({
+    const id = await sendPsitsTemplatedEmail({
       to: data.applicantEmail,
       subject: "Update on Your PSITS Application",
       category: "Philippine Technology of Information Technology Students",
@@ -716,6 +787,9 @@ export const recruitmentRejectedMail = async (data: {
       `,
     });
 
+    if (id?.id) {
+      await emailService.updateEmailIdById(String(queueEntry._id), id.id);
+    }
     await emailService.updateStatusById(String(queueEntry._id), "sent");
   } catch (err: unknown) {
     console.error(

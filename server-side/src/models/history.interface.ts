@@ -1,11 +1,9 @@
+import mongoose from "mongoose";
+
 export interface IHistory {
-  id_number: string;
-  rfid?: string;
+  membership_id?: mongoose.Types.ObjectId;
+  student?: mongoose.Types.ObjectId;
   reference_code: string;
-  name: string;
-  year: number;
-  course: string;
-  type: string;
   date: Date;
   admin: string;
   total: number;

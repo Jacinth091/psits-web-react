@@ -26,18 +26,18 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import logo from "@/assets/logo_forms_100x100.png";
+import {
+  STUDENT_ID_LENGTH,
+  STUDENT_ID_MESSAGE,
+  validateId,
+} from "@/utils/studentId";
+import type { Campus } from "@/features/auth/types/auth.types";
 
 const TEST_WORD_PATTERN =
   /(^|\b)(test|asdf|qwerty|sample|dummy|foobar|admin|demo|example|placeholder|lorem|ipsum|temp|fake|junk|noreply|nobody|whatever|asdasd|zzz|aaa|hello|hehe|haha|wala)(\b|$)/i;
 
 function isSuspiciousName(value: string) {
   return TEST_WORD_PATTERN.test(value.trim());
-}
-
-function isSuspiciousId(value: string) {
-  const isRepeating = /^(\d)\1+$/.test(value);
-  const isSequential = /^(0123456789|1234567890|12345678)$/.test(value);
-  return isRepeating || isSequential;
 }
 
 function isSuspiciousEmail(email: string): boolean {
@@ -55,12 +55,25 @@ function isSuspiciousEmail(email: string): boolean {
   return false;
 }
 
+const CAMPUS_VALUES = [
+  "UC_MAIN",
+  "UC_BANILAD",
+  "UC_LM",
+  "UC_PT",
+] as const satisfies readonly Campus[];
+
 const baseSchema = z.object({
   id: z
     .string()
-    .min(8, "ID Number must at least be 8 digits.")
-    .refine((val) => !isSuspiciousId(val), {
-      message: "Please enter a valid student ID number",
+    .trim()
+    .superRefine((val, ctx) => {
+      const result = validateId(val, { rejectSuspicious: true });
+      if (!result.valid) {
+        ctx.addIssue({
+          code: "custom",
+          message: result.message ?? STUDENT_ID_MESSAGE,
+        });
+      }
     }),
   lname: z
     .string()
@@ -80,6 +93,9 @@ const baseSchema = z.object({
     .refine((val) => !isSuspiciousEmail(val), {
       message: "Please enter a valid, real email address",
     }),
+  campus: z.enum(CAMPUS_VALUES, {
+    error: "Campus is required",
+  }),
   course: z.string().min(1, "Course is required"),
   year: z.string().min(1, "Year level is required"),
   password: z
@@ -107,7 +123,7 @@ type Step = (typeof STEPS)[number];
 const STEP_FIELDS: Record<Step, (keyof SignupCredentials)[]> = {
   name: ["lname", "fname"],
   "id-email": ["id", "email"],
-  "course-year": ["course", "year"],
+  "course-year": ["campus", "course", "year"],
   password: ["password", "confirmPassword"],
 };
 
@@ -150,6 +166,7 @@ export default function SignupForm({
       lname: "",
       fname: "",
       email: "",
+      campus: "UC_MAIN",
       course: "",
       year: "",
       password: "",
@@ -374,6 +391,8 @@ export default function SignupForm({
                               aria-invalid={isInvalid}
                               placeholder=" "
                               autoComplete="off"
+                              inputMode="numeric"
+                              maxLength={STUDENT_ID_LENGTH}
                               className={inputClasses}
                             />
                             <label
@@ -432,7 +451,45 @@ export default function SignupForm({
               )}
 
               {step === "course-year" && (
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                  {/* Campus */}
+                  <form.Field
+                    name="campus"
+                    validators={{ onSubmit: baseSchema.shape.campus }}
+                    children={(field) => {
+                      const isInvalid =
+                        (field.state.meta.isTouched || attemptedSteps[step]) &&
+                        !field.state.meta.isValid;
+                      return (
+                        <Field data-invalid={isInvalid}>
+                          <FieldLabel>Campus</FieldLabel>
+                          <Select
+                            name={field.name}
+                            value={field.state.value}
+                            onValueChange={(value) =>
+                              field.handleChange(
+                                value as (typeof CAMPUS_VALUES)[number]
+                              )
+                            }
+                          >
+                            <SelectTrigger className="h-12 w-full rounded-xl border-gray-200">
+                              <SelectValue placeholder="Choose campus" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {CAMPUS_VALUES.map((campus) => (
+                                <SelectItem key={campus} value={campus}>
+                                  {campus}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          {isInvalid && (
+                            <FieldError errors={field.state.meta.errors} />
+                          )}
+                        </Field>
+                      );
+                    }}
+                  />
                   {/* Course */}
                   <form.Field
                     name="course"

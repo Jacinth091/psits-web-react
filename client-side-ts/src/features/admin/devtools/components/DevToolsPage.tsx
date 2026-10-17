@@ -110,6 +110,11 @@ export const DevToolsPage = () => {
     setJobFormOpen(true);
   };
 
+  const handleEditJob = (job: AutomationJob) => {
+    setEditingJob(job);
+    setJobFormOpen(true);
+  };
+
   const handleJobSuccess = () => {
     setJobFormOpen(false);
     setEditingJob(null);
@@ -159,7 +164,7 @@ export const DevToolsPage = () => {
                 setActiveSection("diagnostics");
               }}
             />
-            <PanelRenderer activeTab={displayActiveTab} onCreateJob={handleCreateJob} />
+            <PanelRenderer activeTab={displayActiveTab} onCreateJob={handleCreateJob} onEditJob={handleEditJob} />
           </TabsContent>
 
           <TabsContent value="operations" className="mt-0 space-y-5">
@@ -175,7 +180,7 @@ export const DevToolsPage = () => {
                 setActiveSection("operations");
               }}
             />
-            <PanelRenderer activeTab={displayActiveTab} onCreateJob={handleCreateJob} />
+            <PanelRenderer activeTab={displayActiveTab} onCreateJob={handleCreateJob} onEditJob={handleEditJob} />
           </TabsContent>
 
           <TabsContent value="security" className="mt-0 space-y-5">
@@ -191,7 +196,7 @@ export const DevToolsPage = () => {
                 setActiveSection("security");
               }}
             />
-            <PanelRenderer activeTab={displayActiveTab} onCreateJob={handleCreateJob} />
+            <PanelRenderer activeTab={displayActiveTab} onCreateJob={handleCreateJob} onEditJob={handleEditJob} />
           </TabsContent>
         </Tabs>
         <JobFormDialog
@@ -255,9 +260,10 @@ const TabBar = ({ tabs, activeTab, onChange }: TabBarProps) => (
 interface PanelRendererProps {
   activeTab: string;
   onCreateJob: () => void;
+  onEditJob: (job: AutomationJob) => void;
 }
 
-const PanelRenderer = ({ activeTab, onCreateJob }: PanelRendererProps) => {
+const PanelRenderer = ({ activeTab, onCreateJob, onEditJob }: PanelRendererProps) => {
   switch (activeTab) {
     case "email":
       return <EmailQueuePanel />;
@@ -308,7 +314,7 @@ const PanelRenderer = ({ activeTab, onCreateJob }: PanelRendererProps) => {
     case "brute-force":
       return <BruteForcePanel />;
     case "automation":
-      return <AutomationPanel onCreateJob={onCreateJob} />;
+      return <AutomationPanel onCreateJob={onCreateJob} onEditJob={onEditJob} />;
     default:
       return null;
   }

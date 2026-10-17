@@ -5,6 +5,8 @@ export type OrganizationTab =
   | "memberRequests"
   | "adminRequests";
 
+export type OrganizationTabCounts = Record<OrganizationTab, number>;
+
 export type OrganizationSortField =
   | "name"
   | "id_number"
@@ -33,6 +35,7 @@ export interface OrganizationAccount {
   access?: string | string[];
   isRequest?: boolean;
   adminRequest?: string;
+  requestedBy?: string;
   githubUsername?: string;
   accountType: "admin" | "member" | "memberRequest" | "adminRequest";
 }

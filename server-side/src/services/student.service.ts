@@ -4,7 +4,7 @@ import { Student } from "../models/student.model";
 import { IStudent } from "../models/student.interface";
 import { account_status, membership_status } from "../enums/status.enums";
 import { student_roles } from "../enums/role.enums";
-import { campus_type } from "../enums/campus.enums";
+import { campus_type, signup_campus_values } from "../enums/campus.enums";
 import { AppError } from "../util/app.error.util";
 
 class StudentService {
@@ -25,7 +25,11 @@ class StudentService {
   //Services
   //get search specific student with params
   getSpecific = async (params: any) => {
-    const student = await Student.findOne(params);
+    // Several callers pass a bare id_number string. Mongoose rejects a
+    // non-object filter outright (ObjectParameterError), so normalize it here
+    // rather than at each call site.
+    const filter = typeof params === "string" ? { id_number: params } : params;
+    const student = await Student.findOne(filter);
     if (!student) {
       throw new AppError("Student not found!", 404);
     }
@@ -70,6 +74,17 @@ class StudentService {
     return { status: true, message: "Student updated successfully" };
   };
 
+  suspendByIdNumber = async (id_number: string) => {
+    const result = await Student.updateOne(
+      { id_number },
+      { $set: { status: account_status.SUSPENDED } }
+    );
+    if (result.matchedCount === 0) {
+      throw new AppError("Student not found", 404);
+    }
+    return { message: "Student suspended", id_number };
+  };
+
   //Register | Create student
   create = async (req: Request) => {
     const {
@@ -81,9 +96,17 @@ class StudentService {
       email,
       course,
       year,
-    }: IStudent = req.body;
+      campus,
+    }: IStudent & { campus?: string } = req.body;
 
     const hashedPassword = await bcrypt.hash(password, 10);
+    // Callers may supply a campus (signup, walk-in registration), but the value
+    // is never trusted verbatim: anything outside the signup campus list -
+    // admin / event-only codes and junk strings included - falls back to MAIN.
+    const requestedCampus = typeof campus === "string" ? campus.trim() : "";
+    const studentCampus = signup_campus_values.includes(requestedCampus)
+      ? requestedCampus
+      : campus_type.MAIN;
 
     const newStudent = new Student({
       id_number,
@@ -100,7 +123,7 @@ class StudentService {
       membershipStatus: membership_status.NONE,
       applied: new Date(),
       role: student_roles.GENERAL,
-      campus: campus_type.MAIN,
+      campus: studentCampus,
       isRequest: false,
       createdAt: new Date(),
     });
@@ -116,7 +139,7 @@ class StudentService {
       }),
       Student.countDocuments({ membershipStatus: membership_status.PENDING }),
       Student.countDocuments({
-        status: account_status.DELETED,
+        status: { $in: [account_status.DELETED, account_status.SUSPENDED] },
       }),
     ]);
 

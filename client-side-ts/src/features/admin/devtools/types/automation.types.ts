@@ -9,12 +9,21 @@ export interface JobSchedule {
   cronExpression?: string;
 }
 
+export type AutomationCategory =
+  | "inventory"
+  | "orders"
+  | "members"
+  | "events"
+  | "system"
+  | "security";
+
 export interface EmailConfig {
   enabled: boolean;
   subjectTemplate: string;
   includeSummary: boolean;
   includeRawData: boolean;
-  useNoetix: boolean;
+  /** Suppress the email when every function returned zero records. */
+  skipIfEmpty?: boolean;
 }
 
 export interface AutomationJob {
@@ -38,7 +47,7 @@ export interface AutomationJob {
 export interface AutomationFunction {
   key: string;
   description: string;
-  category: "inventory" | "orders" | "members" | "events" | "system" | "security";
+  category: AutomationCategory;
   defaultParams: Record<string, unknown>;
 }
 
@@ -55,6 +64,7 @@ export interface ExecuteResult {
   job: AutomationJob;
   results: FunctionResult[];
   emailQueued: boolean;
+  webhookSent: boolean;
   targets: Array<{ name: string; email: string }>;
 }
 

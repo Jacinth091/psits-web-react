@@ -13,11 +13,14 @@ import {
   ChevronsUpDown,
   Clock3,
   Edit3,
+  Eye,
+  EyeOff,
   Filter,
   History,
   KeyRound,
   Mail,
   MoreHorizontal,
+  Plus,
   Printer,
   RefreshCcw,
   RotateCcw,
@@ -27,6 +30,7 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { AddMembershipDialog } from "./AddMembershipDialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -68,6 +72,8 @@ import type {
   StudentSortField,
   StudentsTab,
 } from "../types/students.types";
+import { membership_status, psits_roles } from "@/utils/enums";
+import { useAuth } from "@/features/auth";
 
 const tabs: Array<{
   key: StudentsTab;
@@ -76,14 +82,19 @@ const tabs: Array<{
 }> = [
   { key: "all", label: "All Members", icon: UsersRound },
   { key: "requests", label: "Membership Requests", icon: Clock3 },
-  { key: "deleted", label: "Deleted Accounts", icon: Trash2 },
+  { key: "deleted", label: "Suspended", icon: Trash2 },
 ];
 
 const courses = ["BSIT", "BSCS", "ACT"];
 const years = ["1", "2", "3", "4"];
-const membershipStatuses = ["ACTIVE", "RENEWED", "PENDING", "NONE"];
+const membershipStatuses = [
+  membership_status.ACTIVE,
+  membership_status.PENDING,
+  membership_status.NONE,
+];
 
 const initialFormValues: StudentFormValues = {
+  id: "",
   id_number: "",
   rfid: "",
   first_name: "",
@@ -100,17 +111,16 @@ const emptyPasswordValues: StudentPasswordValues = {
 };
 
 const formatMembership = (status: string) => {
-  if (status === "ACTIVE") return "Active";
-  if (status === "RENEWED") return "Renewed";
-  if (status === "PENDING") return "Pending";
+  if (status === membership_status.ACTIVE) return "Active";
+  if (status === membership_status.PENDING) return "Pending";
   return "Not Applied";
 };
 
 const membershipTone = (status: string) => {
-  if (status === "ACTIVE" || status === "RENEWED") {
+  if (status === membership_status.ACTIVE) {
     return "bg-green-100 text-green-600";
   }
-  if (status === "PENDING") return "bg-sky-100 text-sky-600";
+  if (status === membership_status.PENDING) return "bg-sky-100 text-sky-600";
   return "bg-[#f2f2f2] text-[#979797]";
 };
 
@@ -160,6 +170,7 @@ const formValuesFromStudent = (
 ): StudentFormValues =>
   student
     ? {
+        id: student.id,
         id_number: student.id_number,
         rfid: student.rfid,
         first_name: student.first_name,
@@ -254,7 +265,9 @@ const StudentsTable = ({
             <col className="w-[14%]" />
             <col className="w-[14%]" />
             <col className="w-[15%]" />
-            <col className={isDeletedTab ? "w-[14%]" : "w-[17%]"} />
+            {!isRequestTab && (
+              <col className={isDeletedTab ? "w-[14%]" : "w-[17%]"} />
+            )}
             {isDeletedTab && <col className="w-[14%]" />}
             <col className={isRequestTab ? "w-[190px]" : "w-16"} />
           </colgroup>
@@ -290,28 +303,20 @@ const StudentsTable = ({
                   Course & Year
                 </SortLabel>
               </th>
-              <th className="px-2 py-2 text-left align-middle font-medium">
-                <SortLabel
-                  field={
-                    isDeletedTab
-                      ? "deletedDate"
-                      : isRequestTab
-                        ? "applied"
-                        : "membershipStatus"
-                  }
-                  onSort={onSort}
-                >
-                  {isDeletedTab
-                    ? "Deleted on"
-                    : isRequestTab
-                      ? "Applied on"
-                      : "Membership"}
-                </SortLabel>
-              </th>
+              {!isRequestTab && (
+                <th className="px-2 py-2 text-left align-middle font-medium">
+                  <SortLabel
+                    field={isDeletedTab ? "deletedDate" : "membershipStatus"}
+                    onSort={onSort}
+                  >
+                    {isDeletedTab ? "Suspended on" : "Membership"}
+                  </SortLabel>
+                </th>
+              )}
               {isDeletedTab && (
                 <th className="px-2 py-2 text-left align-middle font-medium">
                   <SortLabel field="deletedBy" onSort={onSort}>
-                    Deleted by
+                    Suspended by
                   </SortLabel>
                 </th>
               )}
@@ -322,19 +327,18 @@ const StudentsTable = ({
             {isLoading ? (
               Array.from({ length: 8 }, (_, index) => (
                 <tr key={index} className="border-b border-[#ededed]">
-                  {Array.from({ length: isDeletedTab ? 8 : 7 }, (_, cell) => (
-                    <td key={cell} className="px-2 py-3">
-                      <Skeleton className="h-4 w-full rounded-full" />
-                    </td>
-                  ))}
+                  {Array.from(
+                    { length: isDeletedTab ? 8 : isRequestTab ? 6 : 7 },
+                    (_, cell) => (
+                      <td key={cell} className="px-2 py-3">
+                        <Skeleton className="h-4 w-full rounded-full" />
+                      </td>
+                    )
+                  )}
                 </tr>
               ))
             ) : data.length > 0 ? (
               data.map((student) => {
-                const canRenew =
-                  student.membershipStatus === "ACTIVE" ||
-                  student.membershipStatus === "RENEWED";
-
                 return (
                   <tr
                     key={`${activeTab}-${student.id_number}`}
@@ -368,29 +372,22 @@ const StudentsTable = ({
                       {student.course || "-"}{" "}
                       {student.year ? `- ${student.year}` : ""}
                     </td>
-                    <td className="px-2 py-3 text-left align-middle">
-                      {isDeletedTab ? (
-                        formatDeletedDate(student.deletedDate)
-                      ) : isRequestTab ? (
-                        <>
-                          <span>{formatDate(student.applied)}</span>
-                          <span className="block text-xs text-[#8a8a8a]">
-                            {student.isFirstApplication
-                              ? "Membership"
-                              : "Renewal"}
+                    {!isRequestTab && (
+                      <td className="px-2 py-3 text-left align-middle">
+                        {isDeletedTab ? (
+                          formatDeletedDate(student.deletedDate)
+                        ) : (
+                          <span
+                            className={cn(
+                              "inline-flex rounded-full px-3 py-1 text-xs font-medium",
+                              membershipTone(student.membershipStatus)
+                            )}
+                          >
+                            {formatMembership(student.membershipStatus)}
                           </span>
-                        </>
-                      ) : (
-                        <span
-                          className={cn(
-                            "inline-flex rounded-full px-3 py-1 text-xs font-medium",
-                            membershipTone(student.membershipStatus)
-                          )}
-                        >
-                          {formatMembership(student.membershipStatus)}
-                        </span>
-                      )}
-                    </td>
+                        )}
+                      </td>
+                    )}
                     {isDeletedTab && (
                       <td className="truncate px-2 py-3 text-left align-middle">
                         {student.deletedBy || "-"}
@@ -456,13 +453,6 @@ const StudentsTable = ({
                               Change Password
                             </DropdownMenuItem>
                             <DropdownMenuItem
-                              disabled={!canRenew}
-                              onClick={() => onAction("renew", [student])}
-                            >
-                              <RefreshCcw className="h-4 w-4" />
-                              Renew Membership
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
                               onClick={() => onHistory(student)}
                             >
                               <History className="h-4 w-4" />
@@ -473,7 +463,7 @@ const StudentsTable = ({
                               variant="destructive"
                             >
                               <Trash2 className="h-4 w-4" />
-                              Delete Account
+                              Suspend Account
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
@@ -485,7 +475,7 @@ const StudentsTable = ({
             ) : (
               <tr>
                 <td
-                  colSpan={isDeletedTab ? 8 : 7}
+                  colSpan={isDeletedTab ? 8 : isRequestTab ? 6 : 7}
                   className="px-3 py-16 text-center text-sm text-[#777]"
                 >
                   No student records found.
@@ -546,13 +536,11 @@ const StudentsTable = ({
 };
 
 interface StudentsFilterPopoverProps {
-  activeTab: StudentsTab;
   filters: StudentFilters;
   onApply: (filters: StudentFilters) => void;
 }
 
 const StudentsFilterPopover = ({
-  activeTab,
   filters,
   onApply,
 }: StudentsFilterPopoverProps) => {
@@ -562,13 +550,11 @@ const StudentsFilterPopover = ({
     courses: [],
     years: [],
     membershipStatus: "all",
-    appliedOn: "",
   };
   const hasActiveFilters =
     filters.courses.length > 0 ||
     filters.years.length > 0 ||
-    filters.membershipStatus !== "all" ||
-    Boolean(filters.appliedOn);
+    filters.membershipStatus !== "all";
 
   useEffect(() => {
     setDraft(filters);
@@ -698,24 +684,6 @@ const StudentsFilterPopover = ({
                 </SelectContent>
               </Select>
             </div>
-            {activeTab === "requests" && (
-              <div>
-                <Label className="mb-2 block text-xs font-medium">
-                  Applied on
-                </Label>
-                <Input
-                  type="date"
-                  value={draft.appliedOn}
-                  onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      appliedOn: event.target.value,
-                    }))
-                  }
-                  className="h-10 rounded-xl border-[#ececec]"
-                />
-              </div>
-            )}
           </div>
           <div className="mt-6 flex justify-end gap-3">
             <Button
@@ -768,6 +736,7 @@ const StudentFormDialog = ({
   onClose,
   onSubmit,
 }: StudentFormDialogProps) => {
+  const { user } = useAuth();
   const [values, setValues] = useState<StudentFormValues>(
     formValuesFromStudent(account)
   );
@@ -782,7 +751,7 @@ const StudentFormDialog = ({
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-[560px] rounded-[24px] border-0 p-0">
+      <DialogContent className="h-[95vh] w-[95vw] overflow-y-auto rounded-[24px] border-0 p-0 sm:h-auto sm:w-[480px]">
         <DialogTitle className="sr-only">Edit student account</DialogTitle>
         <DialogDescription className="sr-only">
           Update the selected student's account details.
@@ -790,8 +759,10 @@ const StudentFormDialog = ({
         <div className="p-6">
           <div className="mb-6 flex items-start justify-between gap-4">
             <div>
-              <h2 className="text-lg font-medium">{account?.name}</h2>
-              <p className="text-sm text-[#8f8f8f]">{account?.email}</p>
+              <h2 className="text-lg font-medium break-all">{account?.name}</h2>
+              <p className="text-sm break-all text-[#8f8f8f]">
+                {account?.email}
+              </p>
             </div>
           </div>
           <div className="space-y-4">
@@ -800,11 +771,22 @@ const StudentFormDialog = ({
                 <Label className="mb-1.5 block text-xs font-medium">
                   Student ID Number
                 </Label>
-                <Input
-                  value={values.id_number}
-                  readOnly
-                  className="h-10 rounded-lg border-0 bg-[#efefef]"
-                />
+                {user?.access === psits_roles.ADMIN ||
+                user?.access === psits_roles.DEVELOPER ? (
+                  <Input
+                    value={values.id_number}
+                    onChange={(event) =>
+                      updateValue("id_number", event.target.value)
+                    }
+                    className="h-10 rounded-lg border-0"
+                  />
+                ) : (
+                  <Input
+                    value={values.id_number}
+                    readOnly
+                    className="h-10 rounded-lg border-0 bg-[#efefef]"
+                  />
+                )}
               </div>
               <div>
                 <Label className="mb-1.5 block text-xs font-medium">RFID</Label>
@@ -951,6 +933,8 @@ const PasswordDialog = ({
 }: PasswordDialogProps) => {
   const [values, setValues] =
     useState<StudentPasswordValues>(emptyPasswordValues);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -966,7 +950,7 @@ const PasswordDialog = ({
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-[420px] rounded-[24px] border-0 p-0">
+      <DialogContent className="rounded-[24px] border-0 p-0 sm:w-[280px] md:w-[420px]">
         <DialogTitle className="sr-only">Change student password</DialogTitle>
         <DialogDescription className="sr-only">
           Change the selected student's account password.
@@ -981,37 +965,67 @@ const PasswordDialog = ({
               <Label className="mb-1.5 block text-xs font-medium">
                 New Password
               </Label>
-              <Input
-                type="password"
-                autoComplete="new-password"
-                value={values.password}
-                onChange={(event) =>
-                  setValues((current) => ({
-                    ...current,
-                    password: event.target.value,
-                  }))
-                }
-                className="h-10 rounded-lg border-[#ececec]"
-                placeholder="Enter your new password"
-              />
+              <div className="relative">
+                <Input
+                  type={showPassword ? "text" : "password"}
+                  autoComplete="new-password"
+                  value={values.password}
+                  onChange={(event) =>
+                    setValues((current) => ({
+                      ...current,
+                      password: event.target.value,
+                    }))
+                  }
+                  className="h-10 rounded-lg border-[#ececec] pr-10"
+                  placeholder="Enter your new password"
+                />
+                <button
+                  type="button"
+                  className="absolute top-1/2 right-3 -translate-y-1/2 text-[#8f8f8f]"
+                  onClick={() => setShowPassword((current) => !current)}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? (
+                    <EyeOff className="h-4 w-4" />
+                  ) : (
+                    <Eye className="h-4 w-4" />
+                  )}
+                </button>
+              </div>
             </div>
             <div>
               <Label className="mb-1.5 block text-xs font-medium">
                 Re-enter your new password
               </Label>
-              <Input
-                type="password"
-                autoComplete="new-password"
-                value={values.confirm_password}
-                onChange={(event) =>
-                  setValues((current) => ({
-                    ...current,
-                    confirm_password: event.target.value,
-                  }))
-                }
-                className="h-10 rounded-lg border-[#ececec]"
-                placeholder="Confirm password"
-              />
+              <div className="relative">
+                <Input
+                  type={showConfirmPassword ? "text" : "password"}
+                  autoComplete="new-password"
+                  value={values.confirm_password}
+                  onChange={(event) =>
+                    setValues((current) => ({
+                      ...current,
+                      confirm_password: event.target.value,
+                    }))
+                  }
+                  className="h-10 rounded-lg border-[#ececec] pr-10"
+                  placeholder="Confirm password"
+                />
+                <button
+                  type="button"
+                  className="absolute top-1/2 right-3 -translate-y-1/2 text-[#8f8f8f]"
+                  onClick={() => setShowConfirmPassword((current) => !current)}
+                  aria-label={
+                    showConfirmPassword ? "Hide password" : "Show password"
+                  }
+                >
+                  {showConfirmPassword ? (
+                    <EyeOff className="h-4 w-4" />
+                  ) : (
+                    <Eye className="h-4 w-4" />
+                  )}
+                </button>
+              </div>
             </div>
           </div>
           <div className="mt-8 flex justify-end gap-3">
@@ -1067,20 +1081,20 @@ const HistoryDialog = ({
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-[720px] rounded-[24px] border-0 p-0">
+      <DialogContent className="w-[95vw] rounded-[24px] border-0 p-0 sm:w-[600px] sm:max-w-[720px] md:w-[720px]">
         <DialogTitle className="sr-only">Membership history</DialogTitle>
         <DialogDescription className="sr-only">
           View the selected student's membership transactions.
         </DialogDescription>
-        <div className="p-6">
-          <div className="mb-6 flex items-center justify-between">
+        <div className="min-w-0 p-6">
+          <div className="mb-6 flex items-center justify-between pr-8">
             <h2 className="flex items-center gap-2 text-lg font-medium">
               <History className="h-5 w-5" />
               Membership History
             </h2>
           </div>
-          <div className="max-h-[380px] overflow-y-auto">
-            <table className="w-full text-sm">
+          <div className="max-h-[380px] overflow-x-auto overflow-y-auto">
+            <table className="w-full min-w-[560px] text-sm">
               <thead>
                 <tr className="bg-[#efefef] text-left text-[#3a3a3a]">
                   <th className="rounded-l-md px-3 py-2 font-medium">
@@ -1182,9 +1196,9 @@ const ConfirmDialog = ({
   const isDelete = action === "delete";
   const isRestore = action === "restore";
   const isCancel = action === "cancelRequest";
-  const isMembership = action === "approve" || action === "renew";
+  const isMembership = action === "approve";
   const primaryLabel = isDelete
-    ? "Delete"
+    ? "Suspend"
     : isRestore
       ? "Restore"
       : isCancel
@@ -1193,7 +1207,7 @@ const ConfirmDialog = ({
           ? "Approve"
           : "Request";
   const title = isDelete
-    ? "Are you sure you want to delete this account?"
+    ? "Are you sure you want to suspend this account?"
     : isRestore
       ? "Restore this student account?"
       : isCancel
@@ -1211,7 +1225,7 @@ const ConfirmDialog = ({
 
   return (
     <Dialog open={Boolean(state)} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-[420px] rounded-[24px] border-0 p-0">
+      <DialogContent className="w-[420px] rounded-[24px] border-0 p-0">
         <DialogTitle className="sr-only">{title}</DialogTitle>
         <DialogDescription className="sr-only">{description}</DialogDescription>
         <div className="p-8">
@@ -1284,6 +1298,7 @@ export const StudentsView = () => {
     membershipFee,
     page,
     pagedStudents,
+    refresh,
     runAction,
     saveStudent,
     search,
@@ -1301,6 +1316,7 @@ export const StudentsView = () => {
     toggleStudentSelection,
     updatePassword,
   } = useStudentsData();
+  const [isAddMembershipOpen, setIsAddMembershipOpen] = useState(false);
   const [formStudent, setFormStudent] = useState<AdminStudent | null>(null);
   const [passwordStudent, setPasswordStudent] = useState<AdminStudent | null>(
     null
@@ -1323,15 +1339,28 @@ export const StudentsView = () => {
       ? "Restore"
       : bulkAction === "approve"
         ? "Approve"
-        : "Delete";
+        : "Suspend";
 
   return (
     <div className="bg-background flex min-h-full flex-1 flex-col text-[#333] [&_[data-disabled]]:pointer-events-auto [&_[data-disabled]]:cursor-not-allowed [&_[role=menuitem]]:cursor-pointer [&_a]:cursor-pointer [&_button:disabled]:pointer-events-auto [&_button:disabled]:cursor-not-allowed [&_button:not(:disabled)]:cursor-pointer">
-      <header className="px-4 py-4 sm:px-6 sm:py-6 lg:px-8">
-        <h1 className="text-2xl font-bold sm:text-3xl">Students</h1>
-        <p className="text-muted-foreground mt-1 text-sm sm:text-base">
-          Manage registered student accounts
-        </p>
+      <header className="flex flex-col justify-between gap-4 px-4 py-4 sm:flex-row sm:items-start sm:px-6 sm:py-6 lg:px-8">
+        <div>
+          <h1 className="text-2xl font-bold sm:text-3xl">Students</h1>
+          <p className="text-muted-foreground mt-1 text-sm sm:text-base">
+            Manage registered student accounts
+          </p>
+        </div>
+
+        {activeTab === "requests" && canManageMembership && (
+          <Button
+            type="button"
+            className="h-10 shrink-0 rounded-full bg-[#1c9dde] hover:bg-[#168bc7]"
+            onClick={() => setIsAddMembershipOpen(true)}
+          >
+            <Plus className="h-4 w-4" />
+            Add Membership
+          </Button>
+        )}
       </header>
 
       <div className="px-4 pb-8 sm:px-6 lg:px-8">
@@ -1375,11 +1404,7 @@ export const StudentsView = () => {
                 className="h-9 rounded-full border-[#e8e8e8] pl-9 text-sm"
               />
             </div>
-            <StudentsFilterPopover
-              activeTab={activeTab}
-              filters={filters}
-              onApply={setFilters}
-            />
+            <StudentsFilterPopover filters={filters} onApply={setFilters} />
           </div>
 
           <StudentsTable
@@ -1391,10 +1416,7 @@ export const StudentsView = () => {
             total={total}
             totalPages={totalPages}
             onAction={(action, records) => {
-              if (
-                (action === "approve" || action === "renew") &&
-                !canManageMembership
-              ) {
+              if (action === "approve" && !canManageMembership) {
                 showToast("error", "Unauthorized.");
                 return;
               }
@@ -1488,6 +1510,12 @@ export const StudentsView = () => {
         membershipFee={membershipFee}
         onClose={() => setConfirmState(null)}
         onConfirm={runAction}
+      />
+
+      <AddMembershipDialog
+        open={isAddMembershipOpen}
+        onClose={() => setIsAddMembershipOpen(false)}
+        onSaved={refresh}
       />
     </div>
   );

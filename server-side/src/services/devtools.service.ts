@@ -6,13 +6,16 @@ import { Student } from "../models/student.model";
 import { Merch } from "../models/merch.model";
 import { Event } from "../models/event.model";
 import { Settings } from "../models/settings.model";
-import ejs from "ejs";
 import path from "path";
 import fs from "fs/promises";
 import os from "os";
 import mongoose, { Types } from "mongoose";
 import { emailService } from "./email.service";
-import { account_status } from "../enums/status.enums";
+import {
+  renderMembershipReceiptHtml,
+  renderOrderReceiptHtml,
+} from "./receipt.service";
+import { account_status, active_status_values } from "../enums/status.enums";
 
 export const getEmailQueueEntries = async ({
   status,
@@ -58,111 +61,35 @@ export const resendSingleEmail = async (id: string) => {
     throw new Error("Only receipt and automation report emails can be resent");
   }
 
-  let html: string;
-  let subject: string;
-
   if (entry.type === "automation-report") {
-    let reportPayload: {
-      jobName: string;
-      executionTime: string;
-      results: Array<{ success: boolean; data?: unknown; recordCount: number; durationMs: number; error?: string }>;
-      includeSummary: boolean;
-      includeRawData: boolean;
-      subject: string;
-    };
-
+    let payload: unknown;
     try {
-      reportPayload = JSON.parse(entry.payload || "{}");
+      payload = JSON.parse(entry.payload || "{}");
     } catch {
       throw new Error("Invalid automation report payload");
     }
 
-    const templatePath = path.join(__dirname, "../templates/automation-report.ejs");
-    html = await ejs.renderFile(templatePath, {
-      jobName: reportPayload.jobName,
-      executionTime: new Date(reportPayload.executionTime).toLocaleString("en-US", {
-        weekday: "long",
-        year: "numeric",
-        month: "long",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        timeZone: "Asia/Manila",
-      }),
-      results: reportPayload.results,
-      includeSummary: reportPayload.includeSummary,
-      includeRawData: reportPayload.includeRawData,
-      targetCount: 1,
-      subject: reportPayload.subject,
-    });
-    subject = reportPayload.subject;
-  } else if (!entry.subtype) {
-    throw new Error("Entry has no subtype");
-  } else if (entry.subtype === "membership") {
-    const history = await MembershipHistory.findOne({
-      reference_code: entry.referenceCode,
-    });
-    if (!history)
-      throw new Error(
-        `Membership history not found for ${entry.referenceCode}`
-      );
-
-    const templatePath = path.join(
-      __dirname,
-      "../../assets/appr-membership-receipt.ejs"
+    const { sendAutomationWebhookPayload } =
+      await import("./automation.service");
+    await sendAutomationWebhookPayload(
+      payload as Parameters<typeof sendAutomationWebhookPayload>[0]
     );
-    const cash = history.total;
-    html = await ejs.renderFile(templatePath, {
-      name: history.name,
-      reference_code: history.reference_code,
-      cash,
-      total: history.total,
-      course: history.course,
-      year: history.year,
-      admin: history.admin,
-      date: new Date(history.date).toLocaleDateString("en-US", {
-        month: "long",
-        day: "numeric",
-        year: "numeric",
-      }),
-      change: 0,
-    });
+    await emailService.updateStatusById(String(entry._id), "sent");
+    return { success: true };
+  }
+
+  if (!entry.subtype) {
+    throw new Error("Entry has no subtype");
+  }
+
+  let html: string;
+  let subject: string;
+
+  if (entry.subtype === "membership") {
+    html = await renderMembershipReceiptHtml(String(entry.referenceCode));
     subject = "Your Receipt from PSITS - UC Main";
   } else if (entry.subtype === "order") {
-    const order = await Orders.findOne({
-      reference_code: entry.referenceCode,
-    });
-    if (!order) throw new Error(`Order not found for ${entry.referenceCode}`);
-
-    const templatePath = path.join(
-      __dirname,
-      "../../assets/appr-order-receipt.ejs"
-    );
-    html = await ejs.renderFile(templatePath, {
-      reference_code: order.reference_code,
-      transaction_date: order.transaction_date
-        ? new Date(order.transaction_date).toLocaleDateString("en-US", {
-            month: "long",
-            day: "numeric",
-            year: "numeric",
-          })
-        : "N/A",
-      student_name: order.student_name,
-      id_number: order.id_number,
-      course: order.course,
-      year: order.year,
-      admin: order.admin || "N/A",
-      items: order.items.map((item: any) => ({
-        product_name: item.product_name,
-        batch: item.batch,
-        sizes: item.sizes || [],
-        variation: item.variation || [],
-        quantity: item.quantity,
-        sub_total: item.sub_total,
-      })),
-      cash: order.total,
-      total: order.total,
-    });
+    html = await renderOrderReceiptHtml(String(entry.referenceCode));
     subject = "Your Order Receipt from PSITS - UC Main";
   } else {
     throw new Error(`Unknown subtype: ${entry.subtype}`);
@@ -284,8 +211,10 @@ export const getEnvStatus = () => {
   const vars: Array<{ key: string; required: boolean }> = [
     { key: "EMAIL", required: true },
     { key: "RESEND_API_KEY", required: true },
-    { key: "BASE_URL", required: true },
-    { key: "MONGO_URI", required: true },
+    { key: "MAKE_AUTOMATION_WEBHOOK_URL", required: false },
+    { key: "MAKE_AUTOMATION_WEBHOOK_API_KEY", required: false },
+    { key: "BASE_URL", required: false },
+    { key: "MONGODB_URI", required: true },
     { key: "R2_BUCKET_NAME", required: false },
     { key: "R2_ACCOUNT_ID", required: false },
     { key: "AWS_BUCKET_NAME", required: false },
@@ -304,7 +233,11 @@ const rateLimitBlockedCounters: { count: number; day: string } = {
   day: "",
 };
 
-const rateLimitViolations: Array<{ ip: string; path: string; timestamp: Date }> = [];
+const rateLimitViolations: Array<{
+  ip: string;
+  path: string;
+  timestamp: Date;
+}> = [];
 const MAX_VIOLATION_LOGS = 1000;
 
 export const getRateLimitStats = () => {
@@ -386,8 +319,11 @@ export const getCollectionStats = async (): Promise<CollectionStat[]> => {
     if (name.startsWith("system.")) continue;
 
     try {
-      const model = mongoose.model(name);
-      const docCount = await model.countDocuments();
+      // Count through the driver, not mongoose.model(name): models are
+      // registered under model names ("Student"), not collection names
+      // ("students"), so every lookup here threw and was swallowed below —
+      // leaving this function permanently returning an empty list.
+      const docCount = await db.collection(name).countDocuments();
 
       let info: any;
       try {
@@ -401,7 +337,7 @@ export const getCollectionStats = async (): Promise<CollectionStat[]> => {
 
       if (expectedIndexes.length > 0) {
         try {
-          const indexes = await (model.collection as any).indexes();
+          const indexes = await (db as any).collection(name).indexes();
           const indexedFields = indexes.flatMap((idx: any) =>
             Object.keys(idx.key).filter((f: string) =>
               expectedIndexes.includes(f)
@@ -484,6 +420,7 @@ export interface LogQueryParams {
   action?: string;
   admin?: string;
   target?: string;
+  search?: string;
   dateFrom?: Date;
   dateTo?: Date;
   limit?: number;
@@ -494,6 +431,7 @@ export const getLogEntries = async ({
   action,
   admin,
   target,
+  search,
   dateFrom,
   dateTo,
   limit = 100,
@@ -505,6 +443,12 @@ export const getLogEntries = async ({
   if (action) query.action = { $regex: action, $options: "i" };
   if (admin) query.admin = { $regex: admin, $options: "i" };
   if (target) query.target = { $regex: target, $options: "i" };
+  if (search) {
+    query.$or = [
+      { admin: { $regex: search, $options: "i" } },
+      { target: { $regex: search, $options: "i" } },
+    ];
+  }
   if (dateFrom || dateTo) {
     const timestampQuery: Record<string, Date> = {};
     if (dateFrom) timestampQuery.$gte = dateFrom;
@@ -513,11 +457,7 @@ export const getLogEntries = async ({
   }
 
   const [entries, total] = await Promise.all([
-    Log.find(query)
-      .sort({ timestamp: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean(),
+    Log.find(query).sort({ timestamp: -1 }).skip(skip).limit(limit).lean(),
     Log.countDocuments(query),
   ]);
 
@@ -598,7 +538,9 @@ export const searchOrders = async ({
   return { entries, total };
 };
 
-export const getOrderDetails = async (id: string): Promise<OrderDetail | null> => {
+export const getOrderDetails = async (
+  id: string
+): Promise<OrderDetail | null> => {
   const { Orders } = await import("../models/orders.model");
   const order = await Orders.findById(id).lean();
   return order as OrderDetail | null;
@@ -615,8 +557,11 @@ export interface CertificateTemplate {
   updatedAt?: string;
 }
 
-export const getCertificateTemplates = async (): Promise<CertificateTemplate[]> => {
-  const { CertificateTemplate: CertModel } = await import("../models/certificateTemplate.model");
+export const getCertificateTemplates = async (): Promise<
+  CertificateTemplate[]
+> => {
+  const { CertificateTemplate: CertModel } =
+    await import("../models/certificateTemplate.model");
   const templates = await CertModel.find().sort({ createdAt: -1 }).lean();
   return templates.map((t: any) => ({
     _id: t._id.toString(),
@@ -640,6 +585,9 @@ export interface RevenueEntry {
 export const getMembershipRevenue = async (): Promise<RevenueEntry[]> => {
   const { MembershipHistory } = await import("../models/history.model");
   const result = await MembershipHistory.aggregate([
+    // Some legacy history rows store `date` as a string, which makes $year/$month
+    // abort the whole aggregation. Skip anything that isn't a real date.
+    { $match: { date: { $type: "date" } } },
     {
       $group: {
         _id: {
@@ -807,10 +755,17 @@ export interface BruteForceLog {
   attempts: Array<{ timestamp: string }>;
 }
 
-const failedAuthAttempts: Map<string, { count: number; lastAttempt: Date; attempts: Date[] }> = new Map();
+const failedAuthAttempts: Map<
+  string,
+  { count: number; lastAttempt: Date; attempts: Date[] }
+> = new Map();
 
 export const incrementFailedAuthAttempt = (ip: string) => {
-  const existing = failedAuthAttempts.get(ip) || { count: 0, lastAttempt: new Date(), attempts: [] };
+  const existing = failedAuthAttempts.get(ip) || {
+    count: 0,
+    lastAttempt: new Date(),
+    attempts: [],
+  };
   existing.count++;
   existing.lastAttempt = new Date();
   existing.attempts.push(new Date());
@@ -820,7 +775,10 @@ export const incrementFailedAuthAttempt = (ip: string) => {
   failedAuthAttempts.set(ip, existing);
 };
 
-export const getBruteForceLogs = (threshold = 5, limit = 50): BruteForceLog[] => {
+export const getBruteForceLogs = (
+  threshold = 5,
+  limit = 50
+): BruteForceLog[] => {
   const result: BruteForceLog[] = [];
   for (const [ip, data] of failedAuthAttempts.entries()) {
     if (data.count >= threshold) {
@@ -946,7 +904,9 @@ export interface FailedEmailDetail {
   canResend: boolean;
 }
 
-export const getFailedEmailDetails = async (limit = 100): Promise<FailedEmailDetail[]> => {
+export const getFailedEmailDetails = async (
+  limit = 100
+): Promise<FailedEmailDetail[]> => {
   const { EmailQueue } = await import("../models/email.model");
   const entries = await EmailQueue.find({ status: "failed" })
     .sort({ timestamp: -1 })
@@ -955,7 +915,9 @@ export const getFailedEmailDetails = async (limit = 100): Promise<FailedEmailDet
   const now = new Date();
   return entries.map((e: any) => {
     const timestamp = new Date(e.timestamp);
-    const daysPending = Math.floor((now.getTime() - timestamp.getTime()) / (1000 * 60 * 60 * 24));
+    const daysPending = Math.floor(
+      (now.getTime() - timestamp.getTime()) / (1000 * 60 * 60 * 24)
+    );
     return {
       _id: e._id.toString(),
       email: e.email,
@@ -970,7 +932,10 @@ export const getFailedEmailDetails = async (limit = 100): Promise<FailedEmailDet
   });
 };
 
-export const bulkUpdateEmailStatus = async (ids: string[], status: string): Promise<number> => {
+export const bulkUpdateEmailStatus = async (
+  ids: string[],
+  status: string
+): Promise<number> => {
   const { EmailQueue } = await import("../models/email.model");
   const result = await EmailQueue.updateMany(
     { _id: { $in: ids } },
@@ -979,7 +944,10 @@ export const bulkUpdateEmailStatus = async (ids: string[], status: string): Prom
   return result.modifiedCount || 0;
 };
 
-export const backfillCreatedAt = async (): Promise<{ migrated: number; skipped: number }> => {
+export const backfillCreatedAt = async (): Promise<{
+  migrated: number;
+  skipped: number;
+}> => {
   const students = await Student.find({ createdAt: { $exists: false } }).lean();
   if (students.length === 0) {
     return { migrated: 0, skipped: 0 };
@@ -988,7 +956,9 @@ export const backfillCreatedAt = async (): Promise<{ migrated: number; skipped: 
   const operations = students.map((s) => ({
     updateOne: {
       filter: { _id: s._id },
-      update: { $set: { createdAt: new mongoose.Types.ObjectId(s._id).getTimestamp() } },
+      update: {
+        $set: { createdAt: new mongoose.Types.ObjectId(s._id).getTimestamp() },
+      },
     },
   }));
 
@@ -998,7 +968,10 @@ export const backfillCreatedAt = async (): Promise<{ migrated: number; skipped: 
   if (existing.length === 0) {
     await new Settings({ studentCreatedAtBackfilled: true }).save();
   } else {
-    await Settings.updateOne({}, { $set: { studentCreatedAtBackfilled: true } });
+    await Settings.updateOne(
+      {},
+      { $set: { studentCreatedAtBackfilled: true } }
+    );
   }
 
   return { migrated: students.length, skipped: 0 };
@@ -1029,7 +1002,10 @@ export const updateStudentYears = async (): Promise<{
   if (existing.length === 0) {
     await new Settings({ studentYearLastUpdated: new Date() }).save();
   } else {
-    await Settings.updateOne({}, { $set: { studentYearLastUpdated: new Date() } });
+    await Settings.updateOne(
+      {},
+      { $set: { studentYearLastUpdated: new Date() } }
+    );
   }
 
   return {
@@ -1066,5 +1042,45 @@ export const decrementStudentYears = async (): Promise<{
     eligible: eligibleIds.length,
     updated: result.modifiedCount,
     skippedYear1: students.length - result.modifiedCount,
+  };
+};
+
+export const suspendOldStudents = async (): Promise<{
+  totalChecked: number;
+  suspended: number;
+}> => {
+  const now = new Date();
+  const oneYearAgo = new Date(now);
+  oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+  const twoYearsAgo = new Date(now);
+  twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
+  const threeYearsAgo = new Date(now);
+  threeYearsAgo.setFullYear(threeYearsAgo.getFullYear() - 3);
+  const fourYearsAgo = new Date(now);
+  fourYearsAgo.setFullYear(fourYearsAgo.getFullYear() - 4);
+  const fiveYearsAgo = new Date(now);
+  fiveYearsAgo.setFullYear(fiveYearsAgo.getFullYear() - 5);
+
+  const activeStatuses = active_status_values;
+
+  const students = await Student.find({
+    status: { $in: activeStatuses },
+    $or: [
+      { createdAt: { $lte: fiveYearsAgo } },
+      { year: { $gte: 4 }, createdAt: { $lte: twoYearsAgo } },
+      { year: { $gte: 3 }, createdAt: { $lte: threeYearsAgo } },
+      { year: { $gte: 2 }, createdAt: { $lte: fourYearsAgo } },
+    ],
+  }).lean();
+
+  const eligibleIds = students.map((s) => s._id);
+  const result = await Student.updateMany(
+    { _id: { $in: eligibleIds }, status: { $in: activeStatuses } },
+    { $set: { status: account_status.SUSPENDED } }
+  );
+
+  return {
+    totalChecked: students.length,
+    suspended: result.modifiedCount,
   };
 };

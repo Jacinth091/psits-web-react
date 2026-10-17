@@ -195,27 +195,28 @@ class OrderService {
     const status = params.status;
 
     const statusLower = status.toLowerCase();
-    const total =
-      statusLower === "paid"
-        ? await this.getPaidCount()
-        : statusLower === "refunded"
-          ? await this.getRefundedCount()
-          : await this.getPendingCount();
-    const result = await Orders.find({
+      const filter = {
       order_status: status,
       ...this.buildOrderSearchQuery(trimmedSearch),
-    })
+    };
+
+    const total = await Orders.countDocuments(filter);
+    const totalPages = total === 0 ? 1 : Math.ceil(total / limit);
+    const safePage = Math.min(page, totalPages);
+
+    const result = await Orders.find(filter)
       .sort(
         statusLower === "paid" ? { transaction_date: -1 } : { order_date: -1 }
       )
-      .skip((page - 1) * limit)
+      .skip((safePage - 1) * limit)
       .limit(limit);
+
     return {
       data: result,
       total,
-      page,
+      page: safePage,
       limit,
-      totalPages: Math.ceil(total / limit),
+      totalPages,
     };
   };
 
@@ -287,6 +288,16 @@ class OrderService {
       if (!findMerch.data) {
         throw new AppError("Could not find Merchandise", 404);
       }
+      //Check if merchandise is available, an expired sale period is reported
+      //separately so the buyer knows why the item was rejected
+      if (!findMerch.status) {
+        throw new AppError(
+          findMerch.reason === "expired"
+            ? "This product's sale period has ended"
+            : "Merchandise is not available",
+          400
+        );
+      }
       //Check sufficient stocks if it is applicable for deduction, it does not less than 0
       const checkStocks = merchandiseService.checkSufficientStocks(
         findMerch.data.stocks,
@@ -294,10 +305,6 @@ class OrderService {
       );
       if (!checkStocks) {
         throw new AppError("Insufficient stocks to deduct!", 404);
-      }
-      //Check if merchandise is available
-      if (!findMerch.status) {
-        throw new AppError("Merchandise is not available", 404);
       }
 
       //Actual price
@@ -573,20 +580,29 @@ class OrderService {
     const expired = await this.getExpiredPendingOrders();
     let cancelledCount = 0;
     let restoredItems = 0;
+    const failedRestores: { orderId: unknown; product_id: unknown; error: string }[] = [];
 
     for (const order of expired) {
       for (const item of order.items) {
-        await Merch.updateOne(
-          { _id: item.product_id },
-          { $inc: { stocks: item.quantity } }
-        );
-        restoredItems += item.quantity;
+        try {
+          await Merch.updateOne(
+            { _id: item.product_id },
+            { $inc: { stocks: item.quantity } }
+          );
+          restoredItems += item.quantity;
+        } catch (error) {
+          failedRestores.push({
+            orderId: order._id,
+            product_id: item.product_id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
       await Orders.findByIdAndDelete(order._id);
       cancelledCount++;
     }
 
-    return { cancelledCount, restoredItems };
+    return { cancelledCount, restoredItems, failedRestores };
   };
 }
 

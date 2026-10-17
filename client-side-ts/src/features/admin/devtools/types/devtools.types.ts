@@ -5,6 +5,7 @@ export interface EmailQueueEntry {
   email: string;
   status: string;
   referenceCode?: string;
+  emailId?: string;
   retryCount: number;
   timestamp: Date;
 }
@@ -78,6 +79,7 @@ export interface LogQueryParams {
   action?: string;
   admin?: string;
   target?: string;
+  search?: string;
   dateFrom?: string;
   dateTo?: string;
   limit?: number;
@@ -189,6 +191,11 @@ export interface StudentYearDecrementResult {
   eligible: number;
   updated: number;
   skippedYear1: number;
+}
+
+export interface SuspendOldStudentsResult {
+  totalChecked: number;
+  suspended: number;
 }
 
 export interface MigrationStatus {

@@ -18,7 +18,8 @@ export interface IAutomationJob extends Document {
     subjectTemplate: string;
     includeSummary: boolean;
     includeRawData: boolean;
-    useNoetix: boolean;
+    /** Suppress the email when every function returned zero records. */
+    skipIfEmpty?: boolean;
   };
   isActive: boolean;
   createdBy: Types.ObjectId;
@@ -61,7 +62,7 @@ const automationJobSchema = new Schema<IAutomationJob>(
       subjectTemplate: { type: String, default: "{{jobName}} - {{date}}" },
       includeSummary: { type: Boolean, default: true },
       includeRawData: { type: Boolean, default: false },
-      useNoetix: { type: Boolean, default: false },
+      skipIfEmpty: { type: Boolean, default: false },
     },
     isActive: { type: Boolean, default: true },
     createdBy: { type: Schema.Types.ObjectId, ref: "Admin", required: true },

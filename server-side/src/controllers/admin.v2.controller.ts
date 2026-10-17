@@ -44,15 +44,12 @@ class AdminController {
       Merch.countDocuments({
         is_active: true,
         start_date: { $lte: new Date() },
-        end_date: { $gte: new Date() },
+        end_date: { $gte: new Date() }
       }),
       Orders.countDocuments({ order_status: "Pending" }),
       Student.countDocuments({
         status: account_status.ACTIVE,
-        $or: [
-          { membershipStatus: membership_status.ACTIVE },
-          { membershipStatus: membership_status.RENEWED },
-        ],
+        membershipStatus: membership_status.ACTIVE,
       }),
       orderService.getDailySales(),
     ]);
@@ -71,6 +68,14 @@ class AdminController {
     const admins = await adminService.getAll(req);
     res.status(200).json({ data: admins });
   });
+  getOrganizationTabCountsController = catchAsync(
+    async (req: Request, res: Response) => {
+      const counts = await adminService.getOrganizationTabCounts(
+        req.admin?.access
+      );
+      res.status(200).json({ data: counts });
+    }
+  );
   getAllAdminMembersController = catchAsync(
     async (req: Request, res: Response) => {
       const admins = await adminService.getAllMembers();
@@ -115,6 +120,7 @@ class AdminController {
   );
   setMemberRoleRemoveController = catchAsync(
     async (req: Request, res: Response) => {
+      
       const result = await adminService.removeRole(req);
       if (!result.status) {
         return res.status(400).json({ message: result.message });

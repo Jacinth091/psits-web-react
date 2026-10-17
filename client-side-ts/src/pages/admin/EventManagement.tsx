@@ -62,7 +62,7 @@ const CAMPUS_CODE_TO_NAME: Record<Campus, string> = {
   UC_BANILAD: "University of Cebu Banilad Campus",
   UC_LM: "University of Cebu Lapu-Lapu & Mandaue",
   UC_PT: "University of Cebu Pardo & Talisay",
-  UC_CS: "University of Cebu Main Campus",
+  UC_CS: "University of Cebu Main Campus - CS",
 };
 
 const DEFAULT_CAMPUSES: Campus[] = ["UC_MAIN", "UC_BANILAD", "UC_LM", "UC_PT"];
@@ -107,9 +107,7 @@ const buildManilaDateTime = (
 
   const dateKey = formatEventDateKey(parsedDate);
   const time = timeValue ?? fallbackTime;
-  const parsedDateTime = new Date(
-    `${dateKey}T${time}:00${MANILA_UTC_OFFSET}`
-  );
+  const parsedDateTime = new Date(`${dateKey}T${time}:00${MANILA_UTC_OFFSET}`);
 
   return Number.isNaN(parsedDateTime.getTime()) ? null : parsedDateTime;
 };
@@ -600,7 +598,7 @@ const EventManagement: React.FC = () => {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto overscroll-contain">
         <div className="space-y-6 px-6 py-4">
           {/* Breadcrumb */}
           <Breadcrumb>

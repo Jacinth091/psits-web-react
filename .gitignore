@@ -7,8 +7,14 @@ build/
 .opencode
 opencode.json
 .archiona
-.cursor/rules/archiona.mdc 
-.continue/archiona.md 
-.clinerules/archiona.md 
-.github/copilot-instructions.md 
+.cursor/rules/archiona.mdc
+.continue/archiona.md
+.clinerules/archiona.md
+.github/copilot-instructions.md
 .aider.archiona.conf.yml
+# SCA scan output (.github/scripts/sca-check.mjs)
+sca-report/
+
+# Private security detail: never commit unfixed vulnerability reports to this public repo.
+# Deliver these through a private GitHub Security Advisory or direct to project leads.
+docs/security-sast/private/

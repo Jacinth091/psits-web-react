@@ -12,14 +12,15 @@ import "express-async-errors";
 import { checkPromos } from "./custom_function/check_promo";
 import { resendPendingEmails } from "./services/email.resend.service";
 import { logCronExecution } from "./services/devtools.service";
+import { membershipService } from "./services/membership.service";
 import devtoolsRoutes from "./routes/devtools.v2.route";
 import { orderService } from "./services/order.service";
 import adminRoutes from "./routes/admin.route";
-import authV2Routes from "./routes/authV2.route";
+import authV2Routes from "./routes/auth.v2.route";
 import cartRoutes from "./routes/cart.route";
 import documentationRoutes from "./routes/documentation.route";
 import eventRoutes from "./routes/events.route";
-import eventsV2Routes from "./routes/eventsV2.route";
+import eventsV2Routes from "./routes/events.v2.route";
 import indexRoutes from "./routes/index.route";
 import logRoutes from "./routes/logs.route";
 import merchRoutes from "./routes/merchandise.route";
@@ -28,19 +29,18 @@ import orderRoutes from "./routes/orders.route";
 import privateRoutes from "./routes/private.route";
 import promoRoutes from "./routes/promo.route";
 import studentRoutes from "./routes/students.route";
-import studentV2Routes from "./routes/studentsV2.route";
+import studentV2Routes from "./routes/students.v2.route";
 import indexV2Routes from "./routes/index.v2.route";
 import reportV2Routes from "./routes/report.v2.route";
 import recruitmentRoutes from "./routes/recruitment.route";
 import { hardDeleteSoftDeletedMerch } from "./controllers/merchandise.v2.controller";
-import certificateV2Routes from "./routes/certificateV2.route";
+import certificateV2Routes from "./routes/certificate.v2.route";
 import { errorHandler } from "./util/errors.util";
 import { globalErrorHandler } from "./middlewares/global.error.middleware";
 import contributionsV2Routes from "./routes/contributions.v2.route";
 import automationRoutes from "./routes/automation.v2.route";
-import noetixChatRoutes from "./routes/noetix-chat.v2.route";
 import { automationService } from "./services/automation.service";
-
+import webhookRoutes from "./routes/webhook.route";
 dotenv.config();
 
 const app = express();
@@ -65,7 +65,11 @@ app.use(
     credentials: true,
   })
 );
-
+app.use(
+  "/api/webhooks",
+  bodyParser.raw({ type: "application/json" }),
+  webhookRoutes
+);
 app.set("trust proxy", 1);
 app.use(bodyParser.json());
 
@@ -97,7 +101,6 @@ app.use("/api/v2/dev", devtoolsRoutes);
 app.use("/api/v2/certificates", certificateV2Routes);
 app.use("/api/v2/contributions", contributionsV2Routes);
 app.use("/api/v2/dev/automation", automationRoutes);
-app.use("/api/v2/chat", noetixChatRoutes);
 
 app.use(errorHandler);
 app.use(globalErrorHandler);
@@ -286,7 +289,45 @@ async function startServer() {
       { timezone: "Asia/Manila" }
     );
 
-    // Schedule automation jobs from database
+    // Membership expiration: flip past-due active memberships to inactive and
+    // drop their students to NONE so access gating + student UI stay correct.
+    const membershipExpireJob = cron.schedule(
+      "0 0 * * *",
+      async () => {
+        console.log("[Midnight PH] Running membership expiration check...");
+        const startedAt = new Date();
+        try {
+          const expiredCount =
+            await membershipService.expirePastDueMemberships();
+          if (expiredCount > 0) {
+            console.log(
+              `[Midnight PH] Expired ${expiredCount} past-due membership(s)`
+            );
+          }
+          await logCronExecution({
+            jobName: "membership-expire",
+            scheduledAt: startedAt,
+            startedAt,
+            completedAt: new Date(),
+            durationMs: Date.now() - startedAt.getTime(),
+            success: true,
+            metadata: { expiredCount },
+          });
+        } catch (err: any) {
+          await logCronExecution({
+            jobName: "membership-expire",
+            scheduledAt: startedAt,
+            startedAt,
+            completedAt: new Date(),
+            durationMs: Date.now() - startedAt.getTime(),
+            success: false,
+            errorMessage: err.message,
+          });
+        }
+      },
+      { timezone: "Asia/Manila" }
+    );
+
     try {
       await automationService.scheduleAllJobs();
     } catch (err) {

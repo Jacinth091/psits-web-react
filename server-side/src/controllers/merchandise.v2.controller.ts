@@ -6,24 +6,18 @@ import { Log } from "../models/log.model";
 import { Event } from "../models/event.model";
 import mongoose, { Types } from "mongoose";
 import { IMerch } from "../models/merch.interface";
-import { DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
 import { Request, Response } from "express";
 import path from "path";
-import { S3Client } from "@aws-sdk/client-s3";
+import { r2Client } from "../lib/r2Client";
 import { expiryStatus } from "../custom_function/conditional_dates";
 
-const r2Client = new S3Client({
-  region: "auto",
-  endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-  credentials: {
-    accessKeyId: process.env.R2_ACCESS_KEY_ID || "",
-    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY || "",
-  },
-});
+//How long an expired product keeps showing in the shop, greyed out, before it
+//is dropped from the listing entirely
+const EXPIRED_GRACE_DAYS = 30;
 
 const r2BucketName = process.env.R2_BUCKET_NAME;
 if (!r2BucketName) throw new Error("R2_BUCKET_NAME is not configured");
-const r2Endpoint = `https://${r2BucketName}.${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`;
 
 type SelectedSizePricing = {
   custom?: boolean;
@@ -52,7 +46,57 @@ const getCustomSizePrice = (
     : null;
 };
 
+const buildProxyImageUrl = (
+  req: Request,
+  file: Express.MulterS3.File
+): string =>
+  `${req.protocol}://${req.get("host")}/api/v2/merchandise/image/${file.key}`;
+
+const isNoSuchKeyError = (error: unknown): boolean => {
+  if (!error || typeof error !== "object") return false;
+
+  const candidate = error as { name?: unknown; Code?: unknown };
+  return candidate.name === "NoSuchKey" || candidate.Code === "NoSuchKey";
+};
+
 class MerchandiseController {
+  async getImage(req: Request, res: Response) {
+    try {
+      const key = req.params[0];
+      if (!key) {
+        return res.status(400).json({ message: "Image key is required" });
+      }
+
+      if (!r2BucketName) {
+        return res
+          .status(500)
+          .json({ message: "Image storage not configured" });
+      }
+
+      const command = new GetObjectCommand({ Bucket: r2BucketName, Key: key });
+      const object = await r2Client.send(command);
+
+      if (!object.Body) {
+        return res.status(404).json({ message: "Image not found" });
+      }
+
+      res.setHeader(
+        "Content-Type",
+        object.ContentType || "application/octet-stream"
+      );
+      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+
+      const stream = object.Body as NodeJS.ReadableStream;
+      stream.pipe(res);
+    } catch (error: unknown) {
+      if (isNoSuchKeyError(error)) {
+        return res.status(404).json({ message: "Image not found" });
+      }
+      console.error("Error streaming merchandise image:", error);
+      return res.status(500).json({ message: "Failed to load image" });
+    }
+  }
+
   async create(req: Request, res: Response) {
     const {
       name,
@@ -83,7 +127,10 @@ class MerchandiseController {
         return res.status(400).json({ error: "Invalid selectedSizes format" });
       }
     } else if (selectedSizes && typeof selectedSizes === "object") {
-      parsedSelectedSizes = selectedSizes as Record<string, SelectedSizePricing>;
+      parsedSelectedSizes = selectedSizes as Record<
+        string,
+        SelectedSizePricing
+      >;
     }
 
     let parsedSessionConfig;
@@ -99,9 +146,9 @@ class MerchandiseController {
     }
 
     const imageUrl =
-      (req.files as Express.MulterS3.File[] | undefined)?.map(
-        (file) => file.location
-      ) || [];
+      (req.files as Express.MulterS3.File[] | undefined)?.map((file) =>
+        buildProxyImageUrl(req, file)
+      ) ?? [];
 
     try {
       const newMerch = new Merch({
@@ -252,16 +299,21 @@ class MerchandiseController {
       const id = req.params._id;
 
       let imageUrl =
-        (req.files as Express.MulterS3.File[] | undefined)?.map(
-          (file) => file.location
-        ) || [];
+        (req.files as Express.MulterS3.File[] | undefined)?.map((file) =>
+          buildProxyImageUrl(req, file)
+        ) ?? [];
       let parsedSelectedSizes: Record<string, SelectedSizePricing> | undefined;
       if (typeof selectedSizes === "string") {
         try {
           parsedSelectedSizes = JSON.parse(selectedSizes);
         } catch (error) {
-          console.error("Invalid JSON format for selectedSizes:", selectedSizes);
-          return res.status(400).json({ error: "Invalid selectedSizes format" });
+          console.error(
+            "Invalid JSON format for selectedSizes:",
+            selectedSizes
+          );
+          return res
+            .status(400)
+            .json({ error: "Invalid selectedSizes format" });
         }
       } else if (selectedSizes && typeof selectedSizes === "object") {
         parsedSelectedSizes = selectedSizes as Record<
@@ -277,19 +329,21 @@ class MerchandiseController {
           : [];
 
       const imageKeys = imagesToRemove.length
-        ? imagesToRemove.map((url) => {
-            try {
-              const p = new URL(url).pathname.replace(/^\//, "");
-              if (!p.startsWith("merchandise/")) {
-                console.error("Unexpected image key prefix:", p);
+        ? imagesToRemove
+            .map((url) => {
+              try {
+                const p = new URL(url).pathname.replace(/^\//, "");
+                if (!p.startsWith("merchandise/")) {
+                  console.error("Unexpected image key prefix:", p);
+                  return null;
+                }
+                return p;
+              } catch (e) {
+                console.error("Invalid image URL:", url);
                 return null;
               }
-              return p;
-            } catch (e) {
-              console.error("Invalid image URL:", url);
-              return null;
-            }
-          }).filter((k): k is string => k !== null)
+            })
+            .filter((k): k is string => k !== null)
         : [];
 
       await Promise.all(
@@ -371,7 +425,8 @@ class MerchandiseController {
               item.category = category;
               item.batch = batch;
               item.limited = control === "limited-purchase" ? true : false;
-              item.quantity = control === "limited-purchase" ? 1 : item.quantity;
+              item.quantity =
+                control === "limited-purchase" ? 1 : item.quantity;
             }
           }
 
@@ -400,7 +455,8 @@ class MerchandiseController {
               item.price = itemPrice;
               item.batch = batch;
               item.limited = control === "limited-purchase" ? true : false;
-              item.quantity = control === "limited-purchase" ? 1 : item.quantity;
+              item.quantity =
+                control === "limited-purchase" ? 1 : item.quantity;
               item.sub_total = itemPrice * item.quantity;
             }
 
@@ -485,25 +541,33 @@ class MerchandiseController {
         return res.status(404).json({ message: "Merch not found" });
       }
       if (merch.is_active) {
-        return res.status(400).json({ message: "Merch must be soft-deleted first before hard delete" });
+        return res.status(400).json({
+          message: "Merch must be soft-deleted first before hard delete",
+        });
       }
 
       // Delete images from R2
       if (merch.imageUrl && merch.imageUrl.length > 0) {
-        const imageKeys = merch.imageUrl.map((url) => {
-          try {
-            return new URL(String(url)).pathname.replace(/^\//, "");
-          } catch {
-            return null;
-          }
-        }).filter((key): key is string => key !== null);
+        const imageKeys = merch.imageUrl
+          .map((url) => {
+            try {
+              return new URL(String(url)).pathname.replace(/^\//, "");
+            } catch {
+              return null;
+            }
+          })
+          .filter((key): key is string => key !== null);
 
-        await Promise.all(imageKeys.map((key) =>
-          r2Client.send(new DeleteObjectCommand({
-            Bucket: process.env.R2_BUCKET_NAME,
-            Key: key,
-          }))
-        ));
+        await Promise.all(
+          imageKeys.map((key) =>
+            r2Client.send(
+              new DeleteObjectCommand({
+                Bucket: process.env.R2_BUCKET_NAME,
+                Key: key,
+              })
+            )
+          )
+        );
       }
 
       await Merch.findByIdAndDelete(product_id);
@@ -538,6 +602,15 @@ class MerchandiseController {
         return res.status(404).json({ message: "Merch not found" });
       }
 
+      //Publishing an already expired product would leave it invisible in the
+      //shop, so ask the admin to extend the sale period first
+      if (merch.end_date && new Date() > new Date(merch.end_date)) {
+        return res.status(400).json({
+          message:
+            "This product's sale period has ended. Extend the sale before publishing it.",
+        });
+      }
+
       const result = await Merch.updateOne(
         { _id: product_id },
         { $set: { is_active: true } }
@@ -570,11 +643,16 @@ class MerchandiseController {
   async retrievePublished(req: Request, res: Response) {
     try {
       const now = new Date();
+      //Recently expired merchandise is still returned so the shop can render it
+      //as expired instead of silently dropping it from the grid
+      const graceCutoff = new Date(
+        now.getTime() - EXPIRED_GRACE_DAYS * 24 * 60 * 60 * 1000
+      );
 
       const merches = await Merch.find({
         is_active: true,
         start_date: { $lte: now },
-        $or: [{ end_date: { $gt: now } }, { end_date: null }],
+        $or: [{ end_date: { $gt: graceCutoff } }, { end_date: null }],
       })
         .select(
           "name price stocks batch description selectedVariations selectedSizes selectedAudience control created_by start_date end_date category type imageUrl"
@@ -613,7 +691,9 @@ class MerchandiseController {
 
 export const merchandiseController = new MerchandiseController();
 
-export const hardDeleteSoftDeletedMerch = async (): Promise<{ deletedCount: number }> => {
+export const hardDeleteSoftDeletedMerch = async (): Promise<{
+  deletedCount: number;
+}> => {
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
@@ -627,20 +707,26 @@ export const hardDeleteSoftDeletedMerch = async (): Promise<{ deletedCount: numb
     try {
       // Delete images from R2
       if (merch.imageUrl && merch.imageUrl.length > 0) {
-        const imageKeys = merch.imageUrl.map((url) => {
-          try {
-            return new URL(String(url)).pathname.replace(/^\//, "");
-          } catch {
-            return null;
-          }
-        }).filter((key): key is string => key !== null);
+        const imageKeys = merch.imageUrl
+          .map((url) => {
+            try {
+              return new URL(String(url)).pathname.replace(/^\//, "");
+            } catch {
+              return null;
+            }
+          })
+          .filter((key): key is string => key !== null);
 
-        await Promise.all(imageKeys.map((key) =>
-          r2Client.send(new DeleteObjectCommand({
-            Bucket: process.env.R2_BUCKET_NAME,
-            Key: key,
-          }))
-        ));
+        await Promise.all(
+          imageKeys.map((key) =>
+            r2Client.send(
+              new DeleteObjectCommand({
+                Bucket: process.env.R2_BUCKET_NAME,
+                Key: key,
+              })
+            )
+          )
+        );
       }
 
       await Merch.findByIdAndDelete(merch._id);

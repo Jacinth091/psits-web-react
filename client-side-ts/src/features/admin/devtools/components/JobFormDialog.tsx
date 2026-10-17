@@ -32,7 +32,7 @@ const DEFAULT_EMAIL_CONFIG: EmailConfig = {
   subjectTemplate: "{{jobName}} - {{date}}",
   includeSummary: true,
   includeRawData: false,
-  useNoetix: false,
+  skipIfEmpty: false,
 };
 
 export const JobFormDialog = ({ open, onClose, job, onSuccess }: JobFormDialogProps) => {
@@ -164,7 +164,7 @@ export const JobFormDialog = ({ open, onClose, job, onSuccess }: JobFormDialogPr
           {/* Email Config */}
           <div className="space-y-3 rounded-lg border border-[#e5e5e5] bg-white p-4">
             <div className="flex items-center justify-between">
-              <Label className="text-xs font-medium text-[#555]">Email Report</Label>
+              <Label className="text-xs font-medium text-[#555]">Webhook Report (Make.com)</Label>
               <Switch
                 checked={emailConfig.enabled}
                 onCheckedChange={(v) => setEmailConfig({ ...emailConfig, enabled: v })}
@@ -202,14 +202,16 @@ export const JobFormDialog = ({ open, onClose, job, onSuccess }: JobFormDialogPr
                     Include raw data
                   </label>
                 </div>
-                <div className="flex items-center gap-3 pt-1 border-t border-[#f0f0f0] pt-3">
+                <div className="flex items-center gap-3 border-t border-[#f0f0f0] pt-3">
                   <Switch
-                    checked={emailConfig.useNoetix}
-                    onCheckedChange={(v) => setEmailConfig({ ...emailConfig, useNoetix: v })}
+                    checked={emailConfig.skipIfEmpty ?? false}
+                    onCheckedChange={(v) => setEmailConfig({ ...emailConfig, skipIfEmpty: v })}
                   />
                   <div>
-                    <label className="text-sm text-[#555]">AI-generated report (Noetix)</label>
-                    <p className="text-xs text-[#8a8a8a] mt-0.5">Uses Noetix to write a narrative email instead of tables</p>
+                    <label className="text-sm text-[#555]">Only send when there's something to report</label>
+                    <p className="text-xs text-[#8a8a8a] mt-0.5">
+                      Skips the webhook payload when every selected function returns zero records. Failures are always sent.
+                    </p>
                   </div>
                 </div>
               </div>

@@ -3,6 +3,7 @@ import type { AxiosError, AxiosResponse } from "axios";
 import backendConnection from "../../../api/backendApi";
 import { showToast } from "../../../utils/alertHelper";
 import type { DashboardStatsResponse } from "../dashboard/types/dashboard.types";
+import type { OrganizationTabCounts } from "../organization/types/organization.types";
 
 interface Student {
   _id?: string;
@@ -53,8 +54,7 @@ interface MembershipRequestData extends Student {
 }
 
 type MembershipRequestResponse =
-  | MembershipRequestData[]
-  | { data: MembershipRequestData[] };
+  MembershipRequestData[] | { data: MembershipRequestData[] };
 
 export interface MerchandiseSizeOption {
   custom?: boolean;
@@ -112,6 +112,7 @@ interface RenewResponse {
 }
 
 interface MembershipHistoryItem {
+  _id: string;
   id_number: string;
   rfid?: string;
   reference_code: string;
@@ -122,11 +123,12 @@ interface MembershipHistoryItem {
   date: string | Date;
   admin?: string;
   total?: number;
+  term_name?: string;
+  membership_name?: string;
 }
 
 type MembershipHistoryResponse =
-  | MembershipHistoryItem[]
-  | { data: MembershipHistoryItem[] };
+  MembershipHistoryItem[] | { data: MembershipHistoryItem[] };
 
 interface DailySalesData {
   product_name: string;
@@ -298,14 +300,12 @@ interface AdminRequest extends Member {
   createdAt: string;
 }
 
-
 interface MembershipApprovalPayload {
-  reference_code: string;
+  // reference_code is generated server-side (year-scoped sequence) and is no
+  // longer sent by the client.
   id_number: string;
   rfid?: string;
-  type: "Membership" | "Renewal";
   admin?: string;
-  cash?: number;
   date?: Date;
   total?: number;
 }
@@ -535,19 +535,92 @@ export const renewStudent = async (): Promise<RenewResponse | void> => {
   }
 };
 
-export const membershipHistory = async (): Promise<
-  MembershipHistoryItem[] | void
-> => {
+export const membershipHistory = async (
+  type?: string
+): Promise<MembershipHistoryItem[] | void> => {
   try {
     const response: AxiosResponse<MembershipHistoryResponse> = await axios.get(
       `${backendConnection()}/api/admin/history`,
       {
         headers: createHeaders(),
+        params: type ? { type } : {},
       }
     );
     return Array.isArray(response.data) ? response.data : response.data.data;
   } catch (error) {
     handleApiError(error, false);
+  }
+};
+
+export interface MembershipOption {
+  name: string;
+  term: string;
+}
+
+export const membershipOptions = async (): Promise<MembershipOption[]> => {
+  try {
+    const response: AxiosResponse<{ data?: unknown[] }> = await axios.get(
+      `${backendConnection()}/api/membership`,
+      { headers: createHeaders() }
+    );
+    const rows = Array.isArray(response.data?.data)
+      ? (response.data.data as Array<{
+          membership_name?: string;
+          term_name?: string;
+        }>)
+      : [];
+    return rows.map((row) => ({
+      name: row.membership_name ?? "",
+      term: row.term_name ?? "",
+    }));
+  } catch (error) {
+    handleApiError(error, false);
+    return [];
+  }
+};
+
+export interface UpdateReferenceResult {
+  ok: boolean;
+  /** Set when the code is already taken, so the dialog can show it inline. */
+  error?: string;
+  emailsRelinked?: number;
+  renumbered?: Array<{ from: string; to: string }>;
+}
+
+export const updateMembershipReference = async (
+  id: string,
+  referenceCode: string,
+  cascade = false
+): Promise<UpdateReferenceResult> => {
+  try {
+    const response: AxiosResponse<{
+      data: {
+        emailsRelinked: number;
+        renumbered: Array<{ from: string; to: string }>;
+      };
+    }> = await axios.patch(
+      `${backendConnection()}/api/admin/history/${encodeURIComponent(
+        id
+      )}/reference`,
+      { reference_code: referenceCode, cascade },
+      { headers: createHeaders() }
+    );
+    return {
+      ok: true,
+      emailsRelinked: response.data?.data?.emailsRelinked,
+      renumbered: response.data?.data?.renumbered,
+    };
+  } catch (error) {
+    // A duplicate code (409) is an expected outcome the dialog reports inline,
+    // so it is returned rather than raised as a generic toast.
+    const status = (error as AxiosError)?.response?.status;
+    const message = (error as AxiosError<{ message?: string }>)?.response?.data
+      ?.message;
+    if (status === 409 || status === 400) {
+      return { ok: false, error: message || "Invalid reference code" };
+    }
+    handleApiError(error);
+    return { ok: false, error: message };
   }
 };
 
@@ -798,19 +871,21 @@ export const updateMerchandise = async (
 export const getDashboardStats =
   async (): Promise<DashboardStatsResponse | void> => {
     const url = `${backendConnection()}/api/admin/dashboard-stats`;
-    return withCache<DashboardStatsResponse | void>(cacheKey(url), 60_000, async () => {
-      try {
-        const response: AxiosResponse<DashboardStatsResponse> = await axios.get(
-          url,
-          {
-            headers: createHeaders(),
-          }
-        );
-        return response.data;
-      } catch (error) {
-        handleApiError(error, false);
+    return withCache<DashboardStatsResponse | void>(
+      cacheKey(url),
+      60_000,
+      async () => {
+        try {
+          const response: AxiosResponse<DashboardStatsResponse> =
+            await axios.get(url, {
+              headers: createHeaders(),
+            });
+          return response.data;
+        } catch (error) {
+          handleApiError(error, false);
+        }
       }
-    });
+    );
   };
 
 export const getDailySales = async (): Promise<DailySalesData[] | void> => {
@@ -840,28 +915,30 @@ export const getDashboardPaidOrders = async ({
 } = {}): Promise<DashboardPaidOrdersResult> => {
   const url = `${backendConnection()}/api/orders/get-all-paid-orders`;
   const params = { page, limit, startDate, endDate };
-  return withCache<DashboardPaidOrdersResult>(cacheKey(url, params), 60_000, async () => {
-    try {
-      const response: AxiosResponse<DashboardPaidOrdersResult> = await axios.get(
-        url,
-        {
-          headers: createHeaders(),
-          params,
-        }
-      );
+  return withCache<DashboardPaidOrdersResult>(
+    cacheKey(url, params),
+    60_000,
+    async () => {
+      try {
+        const response: AxiosResponse<DashboardPaidOrdersResult> =
+          await axios.get(url, {
+            headers: createHeaders(),
+            params,
+          });
 
-      return {
-        data: response.data.data || [],
-        total: response.data.total || 0,
-        page: response.data.page || page,
-        totalPages: response.data.totalPages || 1,
-        limit: response.data.limit || limit,
-      };
-    } catch (error) {
-      handleApiError(error, false);
-      return { data: [], total: 0, page, totalPages: 1, limit };
+        return {
+          data: response.data.data || [],
+          total: response.data.total || 0,
+          page: response.data.page || page,
+          totalPages: response.data.totalPages || 1,
+          limit: response.data.limit || limit,
+        };
+      } catch (error) {
+        handleApiError(error, false);
+        return { data: [], total: 0, page, totalPages: 1, limit };
+      }
     }
-  });
+  );
 };
 
 export const deleteReports = async (
@@ -899,13 +976,32 @@ export const getAllMembers = async (): Promise<Member[] | void> => {
   }
 };
 
-export const getAllOfficers = async (roleFilter?: string): Promise<Officer[] | void> => {
+export const getOrganizationTabCounts = async (): Promise<
+  OrganizationTabCounts | void
+> => {
+  try {
+    const response: AxiosResponse<{ data: OrganizationTabCounts }> =
+      await axios.get(
+        `${backendConnection()}/api/admin/get-organization-tab-counts`,
+        { headers: createHeaders() }
+      );
+    return response.status === 200 ? response.data.data : undefined;
+  } catch (error) {
+    handleApiError(error, false);
+    throw error;
+  }
+};
+
+export const getAllOfficers = async (
+  roleFilter?: string
+): Promise<Officer[] | void> => {
   try {
     const response: AxiosResponse<{ data: Officer[] }> = await axios.get(
       `${backendConnection()}/api/admin/get-all-officers`,
       {
         headers: createHeaders(),
-        params: roleFilter && roleFilter !== "all" ? { role_filter: roleFilter } : {},
+        params:
+          roleFilter && roleFilter !== "all" ? { role_filter: roleFilter } : {},
       }
     );
     return response.status === 200 ? response.data.data : [];
@@ -1109,27 +1205,31 @@ export const fetchAllPendingCounts = async ({
 }: PendingCountsParams = {}): Promise<PendingCountsResult> => {
   const url = `${backendConnection()}/api/orders/get-all-pending-counts`;
   const params = { page, limit, sort, search };
-  return withCache<PendingCountsResult>(cacheKey(url, params), 30_000, async () => {
-    try {
-      const response: AxiosResponse<PendingCountsResult> = await axios.get(
-        url,
-        {
-          headers: { Authorization: `Bearer ${getAuthToken()}` },
-          params,
-        }
-      );
-      return {
-        data: response.data.data || [],
-        total: response.data.total || 0,
-        page: response.data.page || 1,
-        totalPages: response.data.totalPages || 1,
-        limit: response.data.limit || limit,
-      };
-    } catch (error) {
-      console.error("Error fetching student:", error);
-      return { data: [], page: 1, total: 0, totalPages: 0, limit };
+  return withCache<PendingCountsResult>(
+    cacheKey(url, params),
+    30_000,
+    async () => {
+      try {
+        const response: AxiosResponse<PendingCountsResult> = await axios.get(
+          url,
+          {
+            headers: { Authorization: `Bearer ${getAuthToken()}` },
+            params,
+          }
+        );
+        return {
+          data: response.data.data || [],
+          total: response.data.total || 0,
+          page: response.data.page || 1,
+          totalPages: response.data.totalPages || 1,
+          limit: response.data.limit || limit,
+        };
+      } catch (error) {
+        console.error("Error fetching student:", error);
+        return { data: [], page: 1, total: 0, totalPages: 0, limit };
+      }
     }
-  });
+  );
 };
 
 export const addOfficer = async (
@@ -1232,6 +1332,7 @@ export const getStudentMembershipHistory = async (
 };
 
 export const updateStudent = async (
+  id: string,
   id_number: string,
   rfid: string,
   first_name: string,
@@ -1245,6 +1346,7 @@ export const updateStudent = async (
     const response: AxiosResponse = await axios.post(
       `${backendConnection()}/api/students/edited-student`,
       {
+        id,
         id_number,
         rfid,
         first_name,

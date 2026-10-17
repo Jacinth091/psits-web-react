@@ -9,7 +9,7 @@ import {
   roleAuthenticateV2,
   adminAccessAuthenticateV2,
 } from "../middlewares/authV2.middleware";
-import { psits_roles } from "../enums/role.enums";
+import { psits_roles, officer_list_access } from "../enums/role.enums";
 const router = Router();
 
 //Search student by ID
@@ -41,6 +41,14 @@ router.get(
   requireAccessTokenV2,
   roleAuthenticateV2(["admin"]),
   membershipController.getMembershipHistoryController
+);
+//Manual correction of a membership reference code
+router.patch(
+  "/history/:id/reference",
+  requireAccessTokenWithDBCheck,
+  roleAuthenticateV2(["admin"]),
+  adminAccessAuthenticateV2([psits_roles.ADMIN, psits_roles.FINANCE]),
+  membershipController.updateMembershipReferenceController
 );
 //Membership Request
 router.get(
@@ -83,12 +91,14 @@ router.get(
   "/get-all-officers",
   requireAccessTokenV2,
   roleAuthenticateV2(["admin"]),
-  adminAccessAuthenticateV2([
-    psits_roles.ADMIN,
-    psits_roles.FINANCE,
-    psits_roles.EXECUTIVE,
-  ]),
+  adminAccessAuthenticateV2([...officer_list_access]),
   adminController.getAllAdminController
+);
+router.get(
+  "/get-organization-tab-counts",
+  requireAccessTokenV2,
+  roleAuthenticateV2(["admin"]),
+  adminController.getOrganizationTabCountsController
 );
 //Get All Members
 router.get(
@@ -156,7 +166,7 @@ router.get(
   "/get-request-role",
   requireAccessTokenV2,
   roleAuthenticateV2(["admin"]),
-  adminController.getAllRequestAdminAccountController
+  adminController.getAllRequestMemberRoleController
 );
 //Get all Admin Account Request Role
 router.get(

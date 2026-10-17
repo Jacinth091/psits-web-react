@@ -6,7 +6,13 @@ import { IAdmin } from "../models/admin.interface";
 import { IAdminDocument } from "../models/admin.interface";
 import { admin_model, role_model } from "../model_template/model_data";
 import { account_status } from "../enums/status.enums";
-import { psits_roles, student_roles } from "../enums/role.enums";
+import {
+  member_role_aliases,
+  member_role_values,
+  psits_roles,
+  student_roles,
+  officer_list_access,
+} from "../enums/role.enums";
 import { logService } from "./log.service";
 import { logs_action } from "../enums/logs.enums";
 import bcrypt from "bcryptjs";
@@ -16,6 +22,35 @@ import { AppError } from "../util/app.error.util";
 import { IResponseMessage } from "../models/global.response.interface";
 import { ILog } from "../models/log.interface";
 import { ICreateAdmin } from "../models/admin.interface";
+
+const ADMIN_ID_SUFFIX = "-admin";
+
+//Admin ids are stored as "<id>-admin" since login uses that suffix to pick the
+//Admin collection over Student. Idempotent: callers that already append it
+//(recruitment, chat tools) must not end up with "-admin-admin".
+const normalizeAdminIdNumber = (id_number: unknown): string => {
+  const trimmed = String(id_number ?? "").trim();
+  if (!trimmed) return "";
+
+  const base = trimmed.endsWith(ADMIN_ID_SUFFIX)
+    ? trimmed.slice(0, -ADMIN_ID_SUFFIX.length).trim()
+    : trimmed;
+
+  return `${base}${ADMIN_ID_SUFFIX}`;
+};
+const normalizeMemberRole = (role?: string): string => {
+  const normalized = String(role ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/^psits_/, "");
+
+  const memberRole = member_role_aliases[normalized];
+  if (!memberRole || !member_role_values.includes(memberRole)) {
+    throw new AppError("Invalid member role.", 400);
+  }
+
+  return memberRole;
+};
 
 class AdminService {
   //Update One Dynamic Admin
@@ -66,6 +101,42 @@ class AdminService {
       },
     };
   };
+  getOrganizationTabCounts = async (access?: string) => {
+    const hiddenAdminAccess =
+      access === psits_roles.HEAD_FINANCE || access === psits_roles.FINANCE
+        ? [psits_roles.EXECUTIVE, psits_roles.ADMIN]
+        : access === psits_roles.EXECUTIVE
+          ? [psits_roles.ADMIN]
+          : undefined;
+    const activeAdminQuery = hiddenAdminAccess
+      ? {
+          status: account_status.ACTIVE,
+          access: { $nin: hiddenAdminAccess },
+        }
+      : { status: account_status.ACTIVE };
+
+    const canViewOfficers = officer_list_access.includes(access ?? "");
+
+    const [admins, members, suspended, memberRequests, adminRequests] =
+      await Promise.all([
+        canViewOfficers ? Admin.countDocuments(activeAdminQuery) : 0,
+        Student.countDocuments({
+          role: { $in: member_role_values },
+          isRequest: false,
+        }),
+        Admin.countDocuments({ status: account_status.SUSPENDED }),
+        Student.countDocuments({ isRequest: true }),
+        Admin.countDocuments({ status: account_status.PENDING }),
+      ]);
+
+    return {
+      admins,
+      members,
+      suspended,
+      memberRequests,
+      adminRequests,
+    };
+  };
   //Get all admin accounts , used in Settings and AllOfficers.jsx
   getAll = async (req: any) => {
     const access = req.admin.access;
@@ -100,14 +171,8 @@ class AdminService {
   };
   //Get all members under admin
   getAllMembers = async () => {
-    const rolesToFind = [
-      student_roles.DEVELOPER,
-      student_roles.OFFICER,
-      student_roles.MEDIA,
-      student_roles.VOLUNTEER,
-    ];
     const members: IStudent[] = await Student.find({
-      role: { $in: rolesToFind },
+      role: { $in: member_role_values },
       isRequest: false,
     });
     if (!members) {
@@ -231,6 +296,19 @@ class AdminService {
       };
     }
   };
+
+  suspendByIdNumber = async (id_number: string) => {
+    const updatedAdmin: IResponseMessage = await this.updateOneDynamic(
+      id_number,
+      {
+        status: account_status.SUSPENDED,
+      }
+    );
+    if (!updatedAdmin.status) {
+      throw new AppError("Admin not found or already suspended", 404);
+    }
+    return { message: "Admin account suspended", id_number };
+  };
   //Remove role of members
   removeRole = async (req: Request) => {
     const { id_number } = req.body;
@@ -311,13 +389,18 @@ class AdminService {
   requestRole = async (req: Request) => {
     const { id_number, role, admin } = req.body;
 
-    //
+    const memberRole = normalizeMemberRole(role);
+    if (!member_role_values.includes(memberRole)) {
+      throw new AppError("Invalid member role.", 400);
+    }
+
     //Parametirized updated
     const params = {
-      role: role,
+      role: memberRole,
       isRequest: true,
       adminRequest: admin,
     };
+
     //Run update
     const updatedRole: IResponseMessage = await studentService.updateOneDynamic(
       id_number,
@@ -377,7 +460,18 @@ class AdminService {
     if (!student) {
       throw new AppError("No student found", 404);
     }
+
+    let approvedRole: string;
+    try {
+      approvedRole = normalizeMemberRole(student.role);
+    } catch {
+      throw new AppError(
+        "This request has an unrecognized role. Decline it and have the member re-request.",
+        400
+      );
+    }
     const updatedRole = await studentService.updateOneDynamic(id_number, {
+      role: approvedRole,
       isRequest: false,
     });
 
@@ -429,15 +523,25 @@ class AdminService {
   };
   //Create Admin Account
   create = async (body: ICreateAdmin, req: Request) => {
-    //Check if id number existed
-    const admin = await Admin.findOne({ id_number: body.id_number });
+    const id_number = normalizeAdminIdNumber(body.id_number);
+    if (!id_number) {
+      throw new AppError("ID number is required", 400);
+    }
+
+    //Check if id number existed, legacy accounts are stored without the suffix
+    //so both forms have to block a second account for the same person
+    const admin = await Admin.findOne({
+      id_number: {
+        $in: [id_number, id_number.slice(0, -ADMIN_ID_SUFFIX.length)],
+      },
+    });
     if (admin) {
       throw new AppError("Already have an account!", 404);
     }
 
     const hashedPassword = await bcrypt.hash(body.password, 10);
     const newAdmin: IAdminDocument = new Admin({
-      id_number: body.id_number,
+      id_number,
       name: body.name,
       password: hashedPassword,
       email: body.email,
@@ -454,7 +558,7 @@ class AdminService {
       admin: req.admin.name,
       admin_id: req.admin._id,
       action: logs_action.CREATE_ADMIN,
-      target: body.id_number,
+      target: id_number,
       target_model: "Admin",
     };
     //Runs Log

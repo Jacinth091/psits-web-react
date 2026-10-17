@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   Check,
   ChevronLeft,
@@ -24,6 +24,7 @@ import { cn } from "@/lib/utils";
 import { showToast } from "@/utils/alertHelper";
 import { getOrderReceiptV2 } from "../api/orders";
 import { useOrdersData, ROWS_PER_PAGE } from "../hooks/useOrdersData";
+import { usePrintReceipt } from "@/components/print";
 import { PrintableOrderReceipt } from "./PrintableOrderReceipt";
 import type { PrintableOrderReceipt as PrintableOrderReceiptData } from "../types/orders.types";
 
@@ -111,7 +112,7 @@ const PaginationFooter = ({
     <div className="mt-7 flex flex-col items-center justify-between gap-3 text-xs text-[#8a8a8a] sm:flex-row">
       <span>
         Showing {total > 0 ? (page - 1) * ROWS_PER_PAGE + 1 : 0} to{" "}
-        {Math.min(page * ROWS_PER_PAGE, total)} of {total}
+        {Math.min(page * ROWS_PER_PAGE, total)} of {total} orders
       </span>
       <div className="flex items-center gap-1">
         <button
@@ -274,11 +275,9 @@ export const OrdersView = () => {
     setPage,
     pendingData,
     pendingTotal,
-    pendingTotalPages,
     pendingStatus,
     paidData,
     paidTotal,
-    paidTotalPages,
     paidStatus,
     isMutating,
     selectedIds,
@@ -297,19 +296,15 @@ export const OrdersView = () => {
   const [cancelTarget, setCancelTarget] = useState<OrderRowData | null>(null);
   const [refundTarget, setRefundTarget] = useState<OrderRowData | null>(null);
   const [detailOrder, setDetailOrder] = useState<OrderRowData | null>(null);
-  const [receipt, setReceipt] = useState<PrintableOrderReceiptData | null>(
-    null
-  );
-  const [printTicket, setPrintTicket] = useState(0);
+  const { receipt, print: printReceipt } =
+    usePrintReceipt<PrintableOrderReceiptData>();
   const [printingOrderId, setPrintingOrderId] = useState<string | null>(null);
 
   const data = activeTab === "pending" ? pendingData : paidData;
-  const totalPages =
-    activeTab === "pending" ? pendingTotalPages : paidTotalPages;
   const status = activeTab === "pending" ? pendingStatus : paidStatus;
   const rowCount =
     activeTab === "pending" ? pendingData.length : paidData.length;
-
+  const total = activeTab === "pending" ? pendingTotal : paidTotal;
   const tabs = [
     {
       key: "pending" as const,
@@ -336,24 +331,9 @@ export const OrdersView = () => {
     selectedIds.includes(row._id)
   );
 
-  const totalPagesNum = Math.max(1, totalPages);
+  const hasRows = data.length > 0;
+  const totalPagesNum = Math.max(1, Math.ceil(total / ROWS_PER_PAGE));
   const currentPage = Math.min(page, totalPagesNum);
-
-  useEffect(() => {
-    if (!receipt || printTicket === 0) return;
-
-    const timer = window.setTimeout(() => {
-      window.print();
-    }, 150);
-
-    return () => window.clearTimeout(timer);
-  }, [receipt, printTicket]);
-
-  useEffect(() => {
-    const handleAfterPrint = () => setReceipt(null);
-    window.addEventListener("afterprint", handleAfterPrint);
-    return () => window.removeEventListener("afterprint", handleAfterPrint);
-  }, []);
 
   const handlePrintReceipt = async (order: OrderRowData) => {
     if (!canManageOrders) {
@@ -368,8 +348,7 @@ export const OrdersView = () => {
         showToast("error", "Unable to load receipt.");
         return;
       }
-      setReceipt(result);
-      setPrintTicket((ticket) => ticket + 1);
+      printReceipt(result);
     } finally {
       setPrintingOrderId(null);
     }
@@ -497,7 +476,7 @@ export const OrdersView = () => {
                   Array.from({ length: 8 }, (_, index) => (
                     <tr key={index} className="border-b border-[#ededed]">
                       {Array.from(
-                        { length: activeTab === "paid" ? 9 : 9 },
+                        { length: activeTab === "paid" ? 8 : 7 },
                         (_, cell) => (
                           <td key={cell} className="px-2 py-3">
                             <Skeleton className="h-4 w-full rounded-full" />
@@ -642,7 +621,7 @@ export const OrdersView = () => {
                 ) : (
                   <tr>
                     <td
-                      colSpan={9}
+                      colSpan={activeTab === "paid" ? 8 : 7}
                       className="px-3 py-16 text-center text-sm text-[#777]"
                     >
                       No {activeTab} orders found.
@@ -654,12 +633,14 @@ export const OrdersView = () => {
           </div>
 
           {/* Pagination */}
-          <PaginationFooter
-            page={currentPage}
-            totalPages={totalPagesNum}
-            total={rowCount}
-            onPageChange={setPage}
-          />
+          {hasRows && total > 0 && (
+            <PaginationFooter
+              page={currentPage}
+              totalPages={totalPagesNum}
+              total={total}
+              onPageChange={setPage}
+            />
+          )}
         </section>
       </div>
 
@@ -848,6 +829,17 @@ export const OrdersView = () => {
                     Transaction Date: {formatDate(detailOrder.transaction_date)}
                   </p>
                 )}
+              <p className="mt-1 text-xs text-[#8a8a8a]">
+                {detailOrder?.membership_discount
+                  ? "Discount: Member"
+                  : detailOrder?.promo?.promo_discount
+                    ? `Discount: Promo${
+                        detailOrder.promo.promo_name
+                          ? ` — ${detailOrder.promo.promo_name}`
+                          : ""
+                      }`
+                    : "No Discount"}
+              </p>
             </div>
 
             <table className="w-full text-sm">
